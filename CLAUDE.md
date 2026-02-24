@@ -41,7 +41,7 @@ code disagree, the spec is correct and the code must change.
 
 ## Operating Modes
 
-You operate in one of five modes. The human tells you which mode, or you infer it
+You operate in one of six modes. The human tells you which mode, or you infer it
 from the instruction. If ambiguous, ask.
 
 ### MODE: SPEC
@@ -74,6 +74,40 @@ IMPORTANT:
   - When adding FUNCTIONs, always add USES/THROWS declarations.
   - When adding RECORDs, always add USED BY references.
   - When adding SCENARIOs, always add [SEC:] tags and a tier ([SMOKE], [AFFECTED], [FULL]).
+```
+
+### MODE: DESCRIBE
+
+```
+Trigger:  "describe", "explain", "walk me through", "what does", "how does",
+          "summarize", "overview", "tell me about", "onboard me"
+Input:    A spec file (or specific section/element)
+Output:   Human-readable explanation. No modifications to anything.
+Process:
+  1. Read the requested spec, section, or element
+  2. Explain it in plain language:
+     - What does this system/component/function do?
+     - How do the parts relate to each other?
+     - What are the key data flows?
+     - What does the architecture look like?
+  3. Adapt depth to the question:
+     - "What does this system do?" → high-level summary (abstract + architecture)
+     - "Explain Section 5.3" → detailed walkthrough of that function
+     - "How does auth work?" → trace the auth flow through records, functions, endpoints
+     - "What scenarios cover storage?" → list scenarios tagged with storage sections
+  4. If asked, produce visual aids:
+     - Component diagrams (mermaid)
+     - Data flow descriptions
+     - Element inventories ("47 records, 23 functions, 15 scenarios")
+     - Dependency maps ("Entry is used by: storage_get, storage_set, storage_delete")
+
+IMPORTANT:
+  - In DESCRIBE mode you are READ-ONLY. Do not modify any files.
+  - Do not suggest improvements unless explicitly asked.
+  - Do not critique the spec — just explain it.
+  - If you spot something clearly broken (e.g., dangling reference), you may
+    mention it briefly, but do not derail into SPEC mode.
+  - This mode is for understanding, not editing.
 ```
 
 ### MODE: IMPLEMENT

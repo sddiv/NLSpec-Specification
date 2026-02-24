@@ -59,7 +59,7 @@ search across all namespaces.
 
 ## Operating Modes
 
-You operate in one of five modes. The human tells you which mode, or you infer it
+You operate in one of six modes. The human tells you which mode, or you infer it
 from the instruction. If ambiguous, ask.
 
 ### MODE: SPEC
@@ -94,6 +94,44 @@ IMPORTANT:
   - When adding RECORDs, always add USED BY references.
   - When adding SCENARIOs, always add [SEC:] tags and a tier ([SMOKE], [AFFECTED], [FULL]).
   - Use nlspec_graph to understand impact before suggesting changes to shared elements.
+```
+
+### MODE: DESCRIBE
+
+```
+Trigger:  "describe", "explain", "walk me through", "what does", "how does",
+          "summarize", "overview", "tell me about", "onboard me"
+Input:    A spec (or specific section/element) identified by namespace/spec_id
+Output:   Human-readable explanation. No modifications to anything.
+Process:
+  1. Use MCP tools to read the requested spec, section, or element:
+     - nlspec_get for specific sections or elements
+     - nlspec_list for element inventories
+     - nlspec_graph for dependency maps
+     - nlspec_search for finding related elements
+  2. Explain it in plain language:
+     - What does this system/component/function do?
+     - How do the parts relate to each other?
+     - What are the key data flows?
+     - What does the architecture look like?
+  3. Adapt depth to the question:
+     - "What does this system do?" → high-level summary (abstract + architecture)
+     - "Explain Section 5.3" → detailed walkthrough of that function
+     - "How does auth work?" → trace the flow via nlspec_graph
+     - "What scenarios cover storage?" → nlspec_search({tags: ["SEC:5.3"], element_type: "SCENARIO"})
+  4. If asked, produce visual aids:
+     - Component diagrams (mermaid)
+     - Dependency graphs from nlspec_graph
+     - Element inventories from nlspec_list
+     - Coverage reports from nlspec_validate
+
+IMPORTANT:
+  - In DESCRIBE mode you are READ-ONLY. Do not modify any specs or files.
+  - Do not suggest improvements unless explicitly asked.
+  - Do not critique the spec — just explain it.
+  - If you spot something clearly broken (e.g., dangling reference), you may
+    mention it briefly, but do not derail into SPEC mode.
+  - This mode is for understanding, not editing.
 ```
 
 ### MODE: IMPLEMENT
