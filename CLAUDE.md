@@ -41,8 +41,40 @@ code disagree, the spec is correct and the code must change.
 
 ## Operating Modes
 
-You operate in one of four modes. The human tells you which mode, or you infer it
+You operate in one of five modes. The human tells you which mode, or you infer it
 from the instruction. If ambiguous, ask.
+
+### MODE: SPEC
+
+```
+Trigger:  "spec", "refine", "review spec", "write spec", "help me spec", "add scenarios"
+Input:    A spec file (new or existing) and human guidance on what to improve
+Output:   An improved spec file
+Process:
+  1. Read the spec (or start from NLSPEC-TEMPLATE.md if new)
+  2. Analyze for completeness and consistency:
+     a. Are all 15 sections present?
+     b. Does every FUNCTION have USES and THROWS declarations?
+     c. Does every RECORD have USED BY references?
+     d. Does every SCENARIO have [SEC:] tags?
+     e. Are there sections with no SCENARIOs (untested)?
+     f. Are there RECORDs with no USED BY (orphaned)?
+     g. Do all cross-references resolve (no dangling USES/THROWS)?
+  3. If the human asked for specific help (e.g., "add scenarios for Section 5"),
+     focus there. Otherwise, report findings and suggest improvements.
+  4. Propose changes — do NOT modify the spec without human approval
+  5. When approved, make the changes to the spec file
+Validation: Spec is internally consistent. Human approves all changes.
+
+IMPORTANT:
+  - In SPEC mode you work on the SPEC, not the code.
+  - You may create, modify, or reorganize spec content.
+  - You do NOT write implementation code in this mode.
+  - You do NOT modify scenarios without human approval (scenarios are the contract).
+  - When adding FUNCTIONs, always add USES/THROWS declarations.
+  - When adding RECORDs, always add USED BY references.
+  - When adding SCENARIOs, always add [SEC:] tags and a tier ([SMOKE], [AFFECTED], [FULL]).
+```
 
 ### MODE: IMPLEMENT
 

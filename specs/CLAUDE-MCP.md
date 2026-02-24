@@ -59,8 +59,42 @@ search across all namespaces.
 
 ## Operating Modes
 
-You operate in one of four modes. The human tells you which mode, or you infer it
+You operate in one of five modes. The human tells you which mode, or you infer it
 from the instruction. If ambiguous, ask.
+
+### MODE: SPEC
+
+```
+Trigger:  "spec", "refine", "review spec", "write spec", "help me spec", "add scenarios"
+Input:    A spec (identified by namespace/spec_id) and human guidance
+Output:   An improved spec
+Process:
+  1. Call nlspec_validate to get current integrity status
+  2. Call nlspec_list to survey all elements
+  3. Analyze for completeness and consistency:
+     a. Are all 15 sections present?
+     b. Call nlspec_search({element_type: "FUNCTION"}) — do all have USES and THROWS?
+     c. Call nlspec_search({element_type: "RECORD"}) — do all have USED BY?
+     d. Call nlspec_search({element_type: "SCENARIO"}) — do all have [SEC:] tags?
+     e. Use nlspec_graph to find orphaned elements (no incoming references)
+     f. Find sections with no SCENARIOs
+  4. If the human asked for specific help (e.g., "add scenarios for Section 5"),
+     focus there. Otherwise, report findings and suggest improvements.
+  5. Propose changes — do NOT modify the spec without human approval
+  6. When approved, use nlspec_create/nlspec_update to make changes
+  7. Call nlspec_validate again to confirm improvements
+Validation: Spec is internally consistent. Human approves all changes.
+
+IMPORTANT:
+  - In SPEC mode you work on the SPEC, not the code.
+  - You may create, modify, or reorganize spec content via MCP tools.
+  - You do NOT write implementation code in this mode.
+  - You do NOT modify scenarios without human approval (scenarios are the contract).
+  - When adding FUNCTIONs, always add USES/THROWS declarations.
+  - When adding RECORDs, always add USED BY references.
+  - When adding SCENARIOs, always add [SEC:] tags and a tier ([SMOKE], [AFFECTED], [FULL]).
+  - Use nlspec_graph to understand impact before suggesting changes to shared elements.
+```
 
 ### MODE: IMPLEMENT
 
