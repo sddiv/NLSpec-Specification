@@ -233,7 +233,6 @@ RECORD SpecImport:
 - Cycles are allowed but warned about. There is no fixed hierarchy or layer count.
 - The 5-layer pattern from NLSPEC-SYSTEM.md is one example taxonomy, not a constraint.
 - `imports` and `imported_by` are symmetric.
-```
 
 **Invariants:**
 - id is unique across the store
