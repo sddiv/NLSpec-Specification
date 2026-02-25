@@ -2,16 +2,17 @@
 
 **Spec ID:** seed-resolver  
 **Version:** 0.1.0  
+**Type:** SYSTEM  
 **Status:** DRAFT  
 **IMPORTS:** nlspec/bootstrap-spec, nlspec/mcp-server-spec  
 
 ---
 
-## 1. Abstract
+## Abstract
 
 ```
 The Seed Resolver is a build-time tool that walks a project's spec dependency graph,
-collects all EXPORT declarations from Section 16 (Dependency Contracts) of each spec,
+collects all EXPORT declarations from Contracts section (Dependency Contracts) of each spec,
 validates EXPECTS contracts are satisfied, detects conflicts, and produces a deterministic
 seed manifest. The seed manifest contains the complete set of rules, constraints,
 invariants, policies, and initial data that the system must be initialized with before
@@ -22,7 +23,7 @@ defaults, no runtime surprises.
 
 ---
 
-## 2. Problem Statement
+## Problem Statement
 
 ```
 CURRENT STATE:
@@ -45,14 +46,14 @@ TARGET STATE:
   detected and reported. The system boots into a fully constrained, auditable state.
 
 KEY INSIGHT:
-  If specs define their exports and expectations formally (Section 16), then the
+  If specs define their exports and expectations formally (Contracts section), then the
   initial state of any system is a computable function of its dependency graph.
   The resolver is that function.
 ```
 
 ---
 
-## 3. Architecture Overview
+## Architecture Overview
 
 ```
 ┌─────────────────────────────────────────────────────────┐
@@ -60,7 +61,7 @@ KEY INSIGHT:
 │                                                         │
 │  spec-a.md ──IMPORTS──► spec-b.md ──IMPORTS──► spec-c.md│
 │      │                      │                     │     │
-│   [SEC:16]               [SEC:16]              [SEC:16] │
+│   [SEC:Contracts]               [SEC:Contracts]              [SEC:Contracts] │
 │   EXPORTS: ...           EXPORTS: ...          EXPORTS: │
 │   EXPECTS: ...           EXPECTS: ...          (leaf)   │
 └────────────────────────────┬────────────────────────────┘
@@ -68,7 +69,7 @@ KEY INSIGHT:
                       ┌──────▼──────┐
                       │   Resolver  │
                       │             │
-                      │  1. Parse   │  ← Read Section 16 from each spec
+                      │  1. Parse   │  ← Read Contracts section from each spec
                       │  2. Collect │  ← Gather all EXPORTS
                       │  3. Match   │  ← Validate EXPECTS against EXPORTS
                       │  4. Detect  │  ← Find conflicts
@@ -89,7 +90,7 @@ KEY INSIGHT:
 
 COMPONENTS:
   1. Graph Walker      — traverses the spec dependency graph via IMPORTS declarations
-  2. Contract Parser   — extracts EXPORT and EXPECTS blocks from Section 16
+  2. Contract Parser   — extracts EXPORT and EXPECTS blocks from Contracts section
   3. Contract Matcher  — validates that every EXPECTS has a matching EXPORT
   4. Conflict Detector — identifies overlapping exports targeting the same component
   5. Conflict Resolver — applies precedence rules to resolve or reject conflicts
@@ -106,7 +107,7 @@ DATA FLOW:
 
 ---
 
-## 4. Data Model
+## DataModel
 
 ```
 RECORD SeedExport:
@@ -114,6 +115,7 @@ RECORD SeedExport:
   spec_id         : String              -- which spec declares this export
   export_name     : String              -- name from the EXPORT block
   type            : ExportType          -- CONSTRAINT | INVARIANT | SEED_DATA | POLICY
+  export_context  : String              -- "runtime" (SYSTEM), "architectural" (PATTERN), "design" (ASSET)
   target          : String              -- which component in the consumer receives this
   condition       : String              -- when this applies ("ALWAYS" if unconditional)
   value           : String              -- the rule, constraint, or data
@@ -184,7 +186,7 @@ ENUM OverrideLevel:
 
 ---
 
-## 5. Core Functions
+## Functions
 
 ```
 FUNCTION walk_graph:
@@ -212,9 +214,14 @@ FUNCTION collect_exports:
 
   BEHAVIOR:
   1. For each spec_id in the ordered list:
-     a. Parse Section 16 (Dependency Contracts)
+     a. Parse Contracts section (Dependency Contracts)
      b. Extract all EXPORT blocks
-     c. Create SeedExport records with graph_depth calculated as the shortest
+     c. Read the spec's Type header (SYSTEM, PATTERN, or ASSET)
+     d. Tag each SeedExport with export_context:
+        - SYSTEM exports → runtime constraints (enforced at boot/runtime)
+        - PATTERN exports → architectural constraints (enforced at implementation time)
+        - ASSET exports → design constraints (enforced when generating UI/config)
+     e. Create SeedExport records with graph_depth calculated as the shortest
         path from relative_to to this spec in the dependency graph
   2. Return all collected exports
 
@@ -228,7 +235,7 @@ FUNCTION collect_expects:
 
   BEHAVIOR:
   1. For each spec_id in the ordered list:
-     a. Parse Section 16 (Dependency Contracts)
+     a. Parse Contracts section (Dependency Contracts)
      b. Extract all EXPECTS blocks
      c. Create SeedExpect records
   2. Return all collected expects
@@ -304,7 +311,8 @@ FUNCTION emit_manifest:
   BEHAVIOR:
   1. Convert winning exports to SeedRules, preserving full provenance
   2. Apply fallbacks for unmatched optional expects
-  3. Group rules by type: constraints, invariants, policies, seed_data
+  3. Group rules by export_context first (runtime, architectural, design),
+     then by type within each group: constraints, invariants, policies, seed_data
   4. Sort within each group by graph_depth (deepest first — foundational rules listed first)
   5. Compute spec_graph_hash from all input spec file hashes
   6. Emit SeedManifest as JSON
@@ -331,7 +339,7 @@ FUNCTION validate_manifest:
 
 ---
 
-## 6. API Surface
+## API Surface
 
 ```
 CLI COMMANDS:
@@ -369,7 +377,7 @@ MCP TOOLS:
 
 ---
 
-## 7. Error Model
+## Errors Model
 
 ```
 ERROR SpecNotFound:
@@ -379,7 +387,7 @@ ERROR SpecNotFound:
   handling  : Build fails. List all missing specs.
 
 ERROR MissingSection16:
-  trigger   : A spec in the graph has no Section 16 (Dependency Contracts)
+  trigger   : A spec in the graph has no Contracts section (Dependency Contracts)
   message   : "Spec '{spec_id}' has no Dependency Contracts section"
   severity  : WARNING
   handling  : Treat spec as having no exports and no expects. Continue resolution.
@@ -427,7 +435,7 @@ ERROR StaleManifest:
 
 ---
 
-## 8. Configuration
+## Configuration
 
 ```
 OPTION resolve.strict_mode:
@@ -465,7 +473,7 @@ OPTION resolve.conflict_strategy:
 
 ---
 
-## 9. Deployment Artifacts
+## Deployment Artifacts
 
 ```
 ARTIFACT nlspec-seed:
@@ -482,22 +490,22 @@ PIPELINE seed-resolve:
     3. If step 1 or 2 fails, block deployment
 
 FILE_TO_SECTION_MAP:
-  src/walker.ts         → [SEC:5] walk_graph
-  src/collector.ts      → [SEC:5] collect_exports, collect_expects
-  src/matcher.ts        → [SEC:5] match_contracts
-  src/conflict.ts       → [SEC:5] detect_conflicts, resolve_conflicts
-  src/emitter.ts        → [SEC:5] emit_manifest
-  src/validator.ts      → [SEC:5] validate_manifest
-  src/cli.ts            → [SEC:6] CLI commands
-  src/mcp.ts            → [SEC:6] MCP tools
+  src/walker.ts         → [SEC:Functions] walk_graph
+  src/collector.ts      → [SEC:Functions] collect_exports, collect_expects
+  src/matcher.ts        → [SEC:Functions] match_contracts
+  src/conflict.ts       → [SEC:Functions] detect_conflicts, resolve_conflicts
+  src/emitter.ts        → [SEC:Functions] emit_manifest
+  src/validator.ts      → [SEC:Functions] validate_manifest
+  src/cli.ts            → [SEC:API] CLI commands
+  src/mcp.ts            → [SEC:API] MCP tools
 ```
 
 ---
 
-## 10. Scenarios
+## Scenarios
 
 ```
-SCENARIO 1: Simple linear dependency [SMOKE] [SEC:5]
+SCENARIO 1: Simple linear dependency [SMOKE] [SEC:Functions]
   GIVEN: spec-a IMPORTS spec-b, spec-b IMPORTS spec-c
   AND:   spec-c EXPORTS a CONSTRAINT with override=NEVER
   AND:   spec-b EXPORTS a POLICY with override=UNRESTRICTED
@@ -507,7 +515,7 @@ SCENARIO 1: Simple linear dependency [SMOKE] [SEC:5]
   AND:   CONSTRAINT has graph_depth=2, POLICY has graph_depth=1
   AND:   provenance traces back to correct specs and sections
 
-SCENARIO 2: Conflict between two NEVER exports [SMOKE] [SEC:5]
+SCENARIO 2: Conflict between two NEVER exports [SMOKE] [SEC:Functions]
   GIVEN: spec-a IMPORTS spec-b and spec-c
   AND:   spec-b EXPORTS "max_memory <= 16GB" with override=NEVER
   AND:   spec-c EXPORTS "max_memory <= 32GB" with override=NEVER
@@ -515,7 +523,7 @@ SCENARIO 2: Conflict between two NEVER exports [SMOKE] [SEC:5]
   THEN:  build FAILS with UnresolvableConflict
   AND:   error message lists both exports with their source specs
 
-SCENARIO 3: More restrictive wins [AFFECTED] [SEC:5]
+SCENARIO 3: More restrictive wins [AFFECTED] [SEC:Functions]
   GIVEN: spec-a IMPORTS spec-b and spec-c
   AND:   spec-b EXPORTS "timeout <= 30s" with override=WITH_JUSTIFICATION
   AND:   spec-c EXPORTS "timeout <= 10s" with override=WITH_JUSTIFICATION
@@ -523,14 +531,14 @@ SCENARIO 3: More restrictive wins [AFFECTED] [SEC:5]
   THEN:  manifest contains "timeout <= 10s" (more restrictive)
   AND:   conflict report shows resolution reasoning
 
-SCENARIO 4: Unmatched required expect [SMOKE] [SEC:5]
+SCENARIO 4: Unmatched required expect [SMOKE] [SEC:Functions]
   GIVEN: spec-a EXPECTS "HardwareLimits" from spec-b (required=true)
-  AND:   spec-b has no Section 16 or no matching EXPORT
+  AND:   spec-b has no Contracts section or no matching EXPORT
   WHEN:  resolve is run with spec-a as entry
   THEN:  build FAILS with UnmatchedRequiredExpect
   AND:   error suggests closest matching exports if any exist
 
-SCENARIO 5: Optional expect with fallback [AFFECTED] [SEC:5]
+SCENARIO 5: Optional expect with fallback [AFFECTED] [SEC:Functions]
   GIVEN: spec-a EXPECTS "LoggingPolicy" from ANY_DEPENDENCY (required=false)
   AND:   fallback = "level=INFO, format=JSON"
   AND:   no dependency exports a LoggingPolicy
@@ -538,7 +546,7 @@ SCENARIO 5: Optional expect with fallback [AFFECTED] [SEC:5]
   THEN:  manifest contains the fallback as a POLICY rule
   AND:   manifest.unmatched lists this expect
 
-SCENARIO 6: Conditional export only applies when condition met [FULL] [SEC:5]
+SCENARIO 6: Conditional export only applies when condition met [FULL] [SEC:Functions]
   GIVEN: spec-b EXPORTS a CONSTRAINT with condition="consumer.has_gpu == true"
   AND:   spec-a IMPORTS spec-b and declares gpu capability
   AND:   spec-c IMPORTS spec-b and does NOT declare gpu capability
@@ -547,14 +555,14 @@ SCENARIO 6: Conditional export only applies when condition met [FULL] [SEC:5]
   WHEN:  resolve is run for spec-c
   THEN:  manifest does NOT include the GPU constraint
 
-SCENARIO 7: Graph depth tiebreaker [FULL] [SEC:5]
+SCENARIO 7: Graph depth tiebreaker [FULL] [SEC:Functions]
   GIVEN: spec-a IMPORTS spec-b IMPORTS spec-c
   AND:   spec-a also IMPORTS spec-c directly
   AND:   spec-c EXPORTS a POLICY
   WHEN:  resolve is run with spec-a as entry
   THEN:  the POLICY has graph_depth=1 (direct import wins over transitive)
 
-SCENARIO 8: Cycle in dependency graph [FULL] [SEC:5]
+SCENARIO 8: Cycle in dependency graph [FULL] [SEC:Functions]
   GIVEN: spec-a IMPORTS spec-b, spec-b IMPORTS spec-a
   AND:   both have EXPORTS
   WHEN:  resolve is run with spec-a as entry
@@ -562,27 +570,27 @@ SCENARIO 8: Cycle in dependency graph [FULL] [SEC:5]
   AND:   both specs' exports are collected (each processed once)
   AND:   manifest is produced successfully
 
-SCENARIO 9: Stale manifest detection [AFFECTED] [SEC:5]
+SCENARIO 9: Stale manifest detection [AFFECTED] [SEC:Functions]
   GIVEN: a seed-manifest.json was generated from a spec graph
   AND:   one spec in the graph has been modified since generation
   WHEN:  validate is run on the manifest
   THEN:  StaleManifest warning is emitted with the changed spec identified
 
-SCENARIO 10: Audit trail [FULL] [SEC:6]
+SCENARIO 10: Audit trail [FULL] [SEC:API]
   GIVEN: a valid seed manifest with 5 rules
   WHEN:  audit is run for rule_id "spec-c.PhysicalMemoryLimit"
-  THEN:  output shows: rule → SeedExport → spec-c Section 16 → [SEC:4.2]
+  THEN:  output shows: rule → SeedExport → spec-c Contracts section → [SEC:DataModel.2]
   AND:   includes the original EXPORT block text
 ```
 
 ---
 
-## 11. Dependencies
+## Dependencies
 
 ```
 DEPENDENCY @nlspec/core:
   version  : >=0.1.0
-  provides : Spec parser, graph walker, Section 16 parsing
+  provides : Spec parser, graph walker, Contracts section parsing
   source   : nlspec/bootstrap-spec
 
 DEPENDENCY Node.js:
@@ -592,7 +600,7 @@ DEPENDENCY Node.js:
 
 ---
 
-## 12. File Structure
+## FileStructure Structure
 
 ```
 nlspec-seed-resolver/
@@ -632,7 +640,7 @@ nlspec-seed-resolver/
 
 ---
 
-## 13. Maintenance Workflow
+## Maintenance Workflow
 
 ```
 BUG CATEGORIES:
@@ -653,7 +661,7 @@ SCENARIO TIERS:
 
 ---
 
-## 14. Build and Run
+## BuildAndRun and Run
 
 ```
 # Install
@@ -676,11 +684,11 @@ npx nlspec-seed audit build/seed-manifest.json --rule "spec-c.PhysicalMemoryLimi
 
 ---
 
-## 15. Boundaries
+## Boundaries
 
 ```
 ### This System Does:
-- Walk spec dependency graphs and collect Section 16 contracts
+- Walk spec dependency graphs and collect Contracts section contracts
 - Validate that all required EXPECTS are matched by EXPORTS
 - Detect and resolve (or reject) conflicting exports
 - Produce a deterministic seed manifest from a spec graph
@@ -705,7 +713,7 @@ npx nlspec-seed audit build/seed-manifest.json --rule "spec-c.PhysicalMemoryLimi
 
 ---
 
-## 16. Dependency Contracts
+## Contracts Contracts
 
 ```
 ### EXPORTS
@@ -716,7 +724,7 @@ EXPORT SeedManifestSchema:
   condition   : ALWAYS
   value       : "SeedManifest JSON schema for parsing and applying seed rules"
   override    : NEVER
-  source_ref  : [SEC:4]
+  source_ref  : [SEC:DataModel]
 
 EXPORT ConflictResolutionRules:
   type        : POLICY
@@ -724,7 +732,7 @@ EXPORT ConflictResolutionRules:
   condition   : ALWAYS
   value       : "Conflict precedence: NEVER > restrictive > closer_to_root"
   override    : WITH_JUSTIFICATION
-  source_ref  : [SEC:5]
+  source_ref  : [SEC:Functions]
 
 ### EXPECTS
 
@@ -744,5 +752,5 @@ EXPECTS GraphWalker:
 
 ### CONFLICT RESOLUTION
 
-Standard rules from NLSPEC-TEMPLATE Section 16 apply.
+Standard rules from NLSPEC-TEMPLATE Contracts section apply.
 ```

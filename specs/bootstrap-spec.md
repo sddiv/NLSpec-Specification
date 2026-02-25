@@ -3,6 +3,7 @@
 > **Version:** 0.1.0
 > **Author:** Divyendu Deepak Singh
 > **Date:** February 2026
+> **Type:** SYSTEM
 > **Language Target:** TypeScript
 > **Status:** Draft
 
@@ -49,7 +50,7 @@ validation, graph) are added later as specs managed by the running system.
 
 ---
 
-## 1. Abstract
+## Abstract
 
 nlspec-bootstrap is the core MCP server that parses nlspec markdown files into
 structured, queryable elements and exposes CRUD + search operations as MCP tools.
@@ -70,7 +71,7 @@ via stdio transport.
 
 ---
 
-## 2. Problem Statement
+## Problem
 
 ### Current State
 AI coding agents receive specs as raw markdown. The agent must manually parse section
@@ -80,7 +81,7 @@ grep or scan the entire file.
 
 ### Deficiency
 No structured CRUD. No search. No indexing. Every agent interaction re-parses the
-same markdown. Cross-spec references (`IMPORT X FROM other-spec.md Section 4.2`)
+same markdown. Cross-spec references (`IMPORT X FROM other-spec.md DataModel.2`)
 require the agent to open files and navigate manually.
 
 ### Target State
@@ -97,7 +98,7 @@ while keeping human-readable markdown as the source of truth.
 
 ---
 
-## 3. Architecture Overview
+## Architecture Overview
 
 ```
 +-----------------------------------------------------------+
@@ -139,7 +140,7 @@ while keeping human-readable markdown as the source of truth.
 +-----------------------------------------------------------+
 ```
 
-### 3.1 Component Inventory
+### Architecture.1 Component Inventory
 
 ### Component: MCP Server
 - **Responsibility:** Expose nlspec operations as MCP tools
@@ -169,12 +170,12 @@ while keeping human-readable markdown as the source of truth.
 - **Called by:** Core Engine
 - **Lifecycle:** Stateless per query
 
-### 3.2 Data Flows
+### Architecture.2 Data Flows
 
 ### Flow: Agent reads a FUNCTION
-1. Agent calls `nlspec_get({spec_id: "kv-store", section: "5.1"})`
+1. Agent calls `nlspec_get({spec_id: "kv-store", section: "Functions.1"})`
 2. MCP Server routes to Core Engine
-3. Core Engine calls Spec Store → SQLite lookup → returns Section 5.1
+3. Core Engine calls Spec Store → SQLite lookup → returns Functions.1
 4. Returns structured JSON with all FUNCTIONs in that section
 
 Latency budget: < 50ms
@@ -188,7 +189,7 @@ Latency budget: < 50ms
 Latency budget: < 50ms
 
 ### Flow: Agent creates a new SCENARIO
-1. Agent calls `nlspec_create({spec_id: "kv-store", section: "10", element_type: "SCENARIO", ...})`
+1. Agent calls `nlspec_create({spec_id: "kv-store", section: "Scenarios", element_type: "SCENARIO", ...})`
 2. Core Engine validates, inserts into SQLite index
 3. Core Engine appends to markdown file atomically (write temp, rename)
 4. Returns created element
@@ -197,19 +198,23 @@ Latency budget: < 100ms
 
 ---
 
-## 4. Data Model
+## DataModel
 
-### 4.1 Core Records
+### DataModel.1 Core Records
 
 ```
 RECORD Spec:
   id           : String              -- unique identifier, kebab-case (e.g., "kv-store")
   name         : String              -- display name (e.g., "KV Store")
   version      : String              -- semver (e.g., "0.1.0")
+  spec_type    : SpecType            -- SYSTEM (default), PATTERN, or ASSET
+  parse_mode   : String              -- "strict" (SECTIONS block present) or "loose" (inferred)
+  section_decl : List<String>        -- ordered section names (from SECTIONS block or inferred from ## headers)
   tags         : List<String>        -- freeform tags (e.g., ["software"], ["quality", "security"])
   path         : String              -- filesystem path to the markdown file
   sections     : List<Section>       -- ordered list of top-level sections
   metadata     : SpecMetadata        -- author, date, language, status
+  gaps         : GapReport           -- structural gap analysis (populated by parse_spec)
   imports      : List<SpecImport>    -- specs this spec imports from (many-to-many)
   imported_by  : List<SpecImport>    -- specs that import this one (computed)
   created_at   : Timestamp
@@ -238,14 +243,18 @@ RECORD SpecImport:
 - id is unique across the store
 - version is valid semver
 - path points to an existing .md file
-- sections are ordered by section number
+- parse_mode is "strict" or "loose"
+- sections are ordered by declaration order (as listed in section_decl)
+- In strict mode: every section name in sections exists in section_decl (unless flagged undeclared)
+- In loose mode: section_decl is inferred from ## headers (no completeness checking)
+- gaps is always populated (may be empty if no gaps detected)
 
 ```
 RECORD Section:
-  id           : String              -- "{spec_id}:{section_number}" (e.g., "kv-store:5.1")
+  id           : String              -- "{spec_id}:{section_name}" (e.g., "kv-store:Functions.1")
   spec_id      : String              -- parent spec
-  number       : String              -- section number (e.g., "5.1", "10")
-  title        : String              -- section title
+  name         : String              -- section name from SECTIONS declaration (e.g., "Functions.1")
+  title        : String              -- display title (e.g., "Query Engine")
   elements     : List<SpecElement>   -- parsed elements in this section
   raw_markdown : String              -- original markdown of this section
 
@@ -254,10 +263,10 @@ RECORD Section:
 
 ```
 RECORD SpecElement:
-  id           : String              -- "{spec_id}:{section}:{type}:{name}"
-                                     -- e.g., "kv-store:4.1:record:Entry"
+  id           : String              -- "{spec_id}:{section_name}:{type}:{name}"
+                                     -- e.g., "kv-store:DataModel.1:record:Entry"
   spec_id      : String              -- parent spec
-  section      : String              -- section number this element lives in
+  section      : String              -- section name this element lives in
   element_type : ElementType         -- what kind of element
   name         : String              -- element name (e.g., "Entry", "storage_get")
   content      : String              -- the element's parsed content as text
@@ -278,7 +287,7 @@ RECORD SpecElement:
 RECORD Reference:
   from_element : String              -- source element ID
   to_element   : String              -- target element name or ID
-  ref_type     : ReferenceType       -- USES, THROWS, IMPORT, TAGGED, USED_BY
+  ref_type     : ReferenceType       -- USES, THROWS, IMPORT, TAGGED, USED_BY, APPLIES_PATTERN, APPLIES_ASSET
   target_spec  : String | None       -- if cross-spec import
   target_section: String | None      -- if cross-spec import
 
@@ -289,6 +298,7 @@ RECORD Reference:
 RECORD SpecMetadata:
   author       : String
   date         : String
+  spec_type    : SpecType            -- parsed from "Type:" header, defaults to SYSTEM
   language     : String
   status       : String              -- Draft | Review | Approved | Implementing | Complete
 
@@ -304,7 +314,7 @@ RECORD SearchResult:
   USED BY: query_search, mcp_search
 ```
 
-### 4.2 Enumerations
+### DataModel.2 Enumerations
 
 ```
 ENUM ElementType:
@@ -323,7 +333,24 @@ ENUM ElementType:
   CONTRACT
   FAILURE_MODE
   IMPORT
+  DEPENDENCY                          -- external dependency declaration from Dependencies section
+  ARTIFACT                           -- build output declaration from BuildAndRun section
+  PATTERN_REF                        -- USES PATTERN declaration from Architecture.3
+  ASSET_REF                          -- USES ASSET declaration from Architecture.3
+  EXPORT                             -- Contracts section EXPORT declaration
+  EXPECTS                            -- Contracts section EXPECTS declaration
+  RULE                               -- style guide rule from ASSET specs (Functions section)
+  TOKEN                              -- design token from ASSET specs (Functions section)
+  LOCALE                             -- locale file entry from ASSET specs (FileStructure section)
+  STRING_CLASS                       -- string classification from ASSET specs (FileStructure section)
   PROSE                              -- unstructured text
+```
+
+```
+ENUM SpecType:
+  SYSTEM                             -- produces running code (default)
+  PATTERN                            -- reusable architectural blueprint
+  ASSET                              -- static resources and design constraints
 ```
 
 ```
@@ -333,26 +360,28 @@ ENUM ReferenceType:
   THROWS                             -- function throws an error
   IMPORTS                            -- cross-spec import
   TAGGED                             -- scenario tags a section [SEC:x.x]
+  APPLIES_PATTERN                    -- component uses a pattern
+  APPLIES_ASSET                      -- component uses an asset
 ```
 
-### 4.3 Type Aliases
+### DataModel.3 Type Aliases
 
 ```
 ALIAS Timestamp = i64               -- Unix milliseconds, UTC
 ALIAS ElementId = String            -- "{spec_id}:{section}:{type}:{name}"
 ALIAS SpecId = String               -- kebab-case identifier
-ALIAS SectionNumber = String        -- e.g., "5.1", "10"
+ALIAS SectionName = String          -- e.g., "Functions.1", "Scenarios"
 ```
 
 ---
 
-## 5. Core Functions
+## Functions
 
-### 5.1 Spec Parser
+### Functions.1 Spec Parser
 
 ```
 FUNCTION parse_spec(markdown: String, spec_id: SpecId) -> Spec
-  USES: Spec, Section, SpecElement, Reference, SpecMetadata
+  USES: Spec, Section, SpecElement, Reference, SpecMetadata, GapReport
   THROWS: ParseError
 
   PRECONDITIONS:
@@ -363,11 +392,25 @@ FUNCTION parse_spec(markdown: String, spec_id: SpecId) -> Spec
   - Every element definition is a SpecElement
   - References (USES, THROWS, IMPORT, [SEC:] tags) are extracted
   - raw_markdown is preserved on every element
+  - gaps field contains any detected structural gaps
 
   BEHAVIOR:
-  1. Parse header block (Version, Author, Date, Language, Status) into SpecMetadata
-  2. Split markdown by "## {N}." section headers into Sections
-  3. For each section, detect and parse elements by pattern matching:
+  1. Parse header block (Version, Author, Date, Type, Language, Status) into SpecMetadata.
+     Any missing header fields get sensible defaults (Type defaults to SYSTEM,
+     Status defaults to Draft). Do NOT reject specs with incomplete headers.
+  2. Look for a SECTIONS declaration block. Two paths:
+     a. SECTIONS block found → parse the declared section names and order.
+        Set section_decl on the Spec. This is the "strict" path.
+     b. No SECTIONS block → discover sections by scanning for "## " headers.
+        Derive section_decl from the headers found, in document order.
+        This is the "loose" path. The spec still works — the parser just
+        can't validate completeness against a declaration.
+  3. Split markdown by "## " section headers into Sections.
+     - If strict: match header text against the SECTIONS declaration. Flag
+       any declared sections missing from the markdown. Flag any markdown
+       sections not in the declaration (undeclared but still parsed).
+     - If loose: every "## " header becomes a section. No completeness check.
+  4. For each section, detect and parse elements by pattern matching:
      a. "RECORD {Name}:" → RECORD
      b. "FUNCTION {name}(" → FUNCTION
      c. "SCENARIO {N}:" → SCENARIO
@@ -383,19 +426,99 @@ FUNCTION parse_spec(markdown: String, spec_id: SpecId) -> Spec
      m. "CONTRACT:" → CONTRACT
      n. "FAILURE:" → FAILURE_MODE
      o. "IMPORT {Name} FROM" → IMPORT
-     p. Everything else → PROSE
-  4. For each element, extract references:
+     p. "DEPENDENCY {name}:" → DEPENDENCY
+     q. "ARTIFACT {name}:" → ARTIFACT
+     q. "USES PATTERN:" → PATTERN_REF
+     q. "USES ASSET:" → ASSET_REF
+     r. "EXPORT {Name}:" → EXPORT
+     s. "EXPECTS {Name}:" → EXPECTS
+     t. "RULE {name}:" → RULE
+     u. "TOKEN {name}:" → TOKEN
+     v. "LOCALE {code}:" → LOCALE
+     w. "STRING_CLASS {name}:" → STRING_CLASS
+     x. Everything else → PROSE
+  5. For each element, extract references:
      a. "USES: A, B, C" → Reference(USES, A), Reference(USES, B), Reference(USES, C)
      b. "THROWS: X, Y" → Reference(THROWS, X), Reference(THROWS, Y)
      c. "USED BY: f1, f2" → Reference(USED_BY, f1), Reference(USED_BY, f2)
-     d. "[SEC:5.3]" in tags → Reference(TAGGED, "5.3")
-     e. "IMPORT X FROM spec.md Section 4.2" → Reference(IMPORTS, X, target_spec, target_section)
-  5. Assign element IDs: "{spec_id}:{section}:{type}:{name}"
-  6. Build and return the Spec
+     d. "[SEC:Functions.3]" in tags → Reference(TAGGED, "Functions.3")
+     e. "IMPORT X FROM spec.md DataModel.2" → Reference(IMPORTS, X, target_spec, target_section)
+     f. "USES PATTERN: X" → Reference(APPLIES_PATTERN, X)
+     g. "USES ASSET: X" → Reference(APPLIES_ASSET, X)
+  6. Assign element IDs: "{spec_id}:{section_name}:{type}:{name}"
+  7. Run gap detection (see analyze_gaps) and attach results to the Spec
+  8. Build and return the Spec
 
   ERRORS:
   - ParseError: malformed element definition. Include line number and context.
     Malformed elements become PROSE, do not reject the entire file.
+  - The parser NEVER rejects a spec. It always returns a Spec, even if
+    incomplete. Gaps are reported, not enforced.
+```
+
+```
+FUNCTION analyze_gaps(spec: Spec) -> GapReport
+  USES: Spec, Section, SpecElement, Reference, GapReport, Gap
+  THROWS: none
+
+  BEHAVIOR:
+  Analyze the parsed spec for structural gaps. Every gap is advisory — the
+  parser still returns the spec. Gaps are categorized by severity:
+
+  CRITICAL gaps (likely to cause implementation failures):
+  1. No Scenarios at all — nothing to validate against
+  2. FUNCTIONs that reference RECORDs not defined anywhere in the spec
+  3. EXPORTS with source_ref pointing to sections that don't exist
+  4. EXPECTS from dependencies that aren't imported
+
+  WARNING gaps (reduced tooling effectiveness):
+  5. FUNCTIONs without USES declarations — context slicing can't trace dependencies
+  6. FUNCTIONs without THROWS declarations — error handling may be incomplete
+  7. RECORDs without USED BY references — possibly orphaned
+  8. SCENARIOs without [SEC:] tags — can't determine which are AFFECTED by changes
+  9. Sections declared in SECTIONS block but missing from markdown
+  10. Elements referenced in USES/THROWS that don't resolve to known elements
+
+  INFO gaps (suggestions for improvement):
+  11. No SECTIONS declaration block — parser is in loose mode
+  12. No Contracts section — dependency contracts not defined
+  13. No Boundaries section — scope may creep during implementation
+  14. TYPE-specific missing sections:
+      - SYSTEM without Deployment → no deployment guidance
+      - SYSTEM without Config → no configuration documented
+      - SYSTEM without Errors → error handling undefined
+      - ASSET without style guide RULEs/TOKENs → design constraints not formalized
+      - PATTERN without Constraints → pattern rules not explicit
+  15. Large PROSE sections with no structured elements — may contain
+      implicit requirements that should be formalized
+
+  USES: Spec, SpecElement, Reference
+  THROWS: none (never fails — always returns a report)
+```
+
+```
+RECORD GapReport:
+  spec_id      : String
+  mode         : String              -- "strict" (has SECTIONS) or "loose" (discovered)
+  critical     : List<Gap>
+  warnings     : List<Gap>
+  info         : List<Gap>
+  completeness : Float               -- 0.0 to 1.0, rough score based on gaps
+
+  USED BY: parse_spec, mcp_validate
+```
+
+```
+RECORD Gap:
+  severity     : String              -- "CRITICAL" | "WARNING" | "INFO"
+  code         : String              -- e.g., "GAP-001", "GAP-005"
+  message      : String              -- human-readable description
+  section      : String | None       -- which section is affected
+  elements     : List<String>        -- which elements are involved
+  suggestion   : String              -- what to do about it
+
+  USED BY: analyze_gaps, mcp_validate
+```
 
   PERFORMANCE:
   - Target: < 100ms for 3000 lines
@@ -423,7 +546,7 @@ FUNCTION render_elements(elements: List<SpecElement>) -> String
   - Must produce markdown that re-parses to identical elements (round-trip)
 ```
 
-### 5.2 Spec Store
+### Functions.2 Spec Store
 
 ```
 FUNCTION store_load(project_dir: String) -> List<Spec>
@@ -459,7 +582,7 @@ FUNCTION store_get(element_id: ElementId) -> SpecElement
 ```
 
 ```
-FUNCTION store_get_section(spec_id: SpecId, section: SectionNumber) -> Section
+FUNCTION store_get_section(spec_id: SpecId, section: SectionName) -> Section
   USES: Section
   THROWS: NotFound
 
@@ -485,7 +608,7 @@ FUNCTION store_create(element: SpecElement) -> SpecElement
   7. Return created element
 
   NOTES:
-  - Markdown append: find the line "## {next_section_number}." or EOF,
+  - Markdown append: find the end of the target section (next "## " header or EOF),
     insert the element's rendered markdown before that line
 ```
 
@@ -526,20 +649,20 @@ FUNCTION store_delete(element_id: ElementId, force: bool) -> SpecElement
 ```
 
 ```
-FUNCTION store_list(spec_id: SpecId | None, element_type: ElementType | None, section: SectionNumber | None, tags: List<String> | None) -> List<SpecElement>
+FUNCTION store_list(spec_id: SpecId | None, element_type: ElementType | None, section: SectionName | None, tags: List<String> | None) -> List<SpecElement>
   USES: SpecElement
   THROWS: (none)
 
   BEHAVIOR:
   1. Query SQLite with optional filters (all are AND)
-  2. Return matching elements ordered by section number, then position
+  2. Return matching elements ordered by declaration order, then position within section
   
   NOTES:
   - All parameters optional. No filters = return everything.
   - Tags filter is exact match: tags=["SMOKE"] returns elements tagged [SMOKE]
 ```
 
-### 5.3 Query Engine
+### Functions.3 Query Engine
 
 ```
 FUNCTION query_search(query: String, spec_id: SpecId | None, element_type: ElementType | None, tags: List<String> | None, references: String | None, limit: u64) -> List<SearchResult>
@@ -575,7 +698,7 @@ FUNCTION query_references(element_id: ElementId, direction: "outgoing" | "incomi
 
 ---
 
-## 6. API Surface — MCP Tools
+## API — MCP Tools
 
 Eight MCP tools. Each takes JSON parameters, returns JSON results.
 
@@ -585,7 +708,7 @@ namespace is used. The namespace system is defined in specs/mcp-server-spec.md.
 Bootstrap tools work without namespaces — they become namespace-aware when the
 MCP server spec is also implemented.
 
-### 6.1 Project Management
+### API.1 Project Management
 
 ```
 MCP TOOL: nlspec_init
@@ -608,7 +731,7 @@ MCP TOOL: nlspec_init
   5. Return spec record and file path
 ```
 
-### 6.2 Read Operations
+### API.2 Read Operations
 
 ```
 MCP TOOL: nlspec_get
@@ -617,7 +740,7 @@ MCP TOOL: nlspec_get
   PARAMETERS:
     element_id   : ElementId | None    -- direct element lookup
     spec_id      : SpecId | None       -- spec to look in (required with section)
-    section      : SectionNumber | None -- section number
+    section      : SectionName | None -- section name (e.g., "Functions.1")
     format       : "json" | "markdown" -- default: "markdown"
 
   RETURNS:
@@ -626,14 +749,14 @@ MCP TOOL: nlspec_get
     markdown     : String | None       -- if format is "markdown"
 
   EXAMPLES:
-    nlspec_get({spec_id: "kv-store", section: "5.1"})
-    → Returns Section 5.1 with all FUNCTIONs, rendered as markdown
+    nlspec_get({spec_id: "kv-store", section: "Functions.1"})
+    → Returns Functions.1 with all FUNCTIONs, rendered as markdown
 
     nlspec_get({element_id: "kv-store:4.1:record:Entry"})
     → Returns the Entry RECORD definition
 
-    nlspec_get({spec_id: "kv-store", section: "5.1", format: "json"})
-    → Returns Section 5.1 as structured JSON with all element fields
+    nlspec_get({spec_id: "kv-store", section: "Functions.1", format: "json"})
+    → Returns Functions.1 as structured JSON with all element fields
 ```
 
 ```
@@ -643,7 +766,7 @@ MCP TOOL: nlspec_list
   PARAMETERS:
     spec_id      : SpecId | None
     element_type : ElementType | None
-    section      : SectionNumber | None
+    section      : SectionName | None
     tags         : List<String> | None
     limit        : u64                 -- default: 100
 
@@ -662,7 +785,7 @@ MCP TOOL: nlspec_list
     → Returns all RECORDs across all specs
 ```
 
-### 6.3 Search
+### API.3 Search
 
 ```
 MCP TOOL: nlspec_search
@@ -686,11 +809,11 @@ MCP TOOL: nlspec_search
     nlspec_search({references: "Entry", element_type: "FUNCTION"})
     → Returns all FUNCTIONs that USES Entry
 
-    nlspec_search({tags: ["SEC:5.1"], element_type: "SCENARIO"})
-    → Returns all SCENARIOs that test Section 5.1
+    nlspec_search({tags: ["SEC:Functions.1"], element_type: "SCENARIO"})
+    → Returns all SCENARIOs that test Functions.1
 ```
 
-### 6.4 Write Operations
+### API.4 Write Operations
 
 ```
 MCP TOOL: nlspec_create
@@ -698,7 +821,7 @@ MCP TOOL: nlspec_create
 
   PARAMETERS:
     spec_id      : SpecId
-    section      : SectionNumber
+    section      : SectionName
     element_type : ElementType
     name         : String
     content      : String              -- element content in nlspec markdown format
@@ -710,11 +833,11 @@ MCP TOOL: nlspec_create
   EXAMPLE:
     nlspec_create({
       spec_id: "kv-store",
-      section: "10",
+      section: "Scenarios",
       element_type: "SCENARIO",
       name: "SCENARIO 50: Empty store list",
-      content: "SCENARIO 50: Empty store list  [SEC:5.1] [SMOKE]\n  GIVEN:\n  - Store is empty\n  WHEN:\n  - GET /kv?limit=100\n  THEN:\n  - Returns 200 with keys: [], count: 0",
-      tags: ["SEC:5.1", "SMOKE"]
+      content: "SCENARIO 50: Empty store list  [SEC:Functions.1] [SMOKE]\n  GIVEN:\n  - Store is empty\n  WHEN:\n  - GET /kv?limit=100\n  THEN:\n  - Returns 200 with keys: [], count: 0",
+      tags: ["SEC:Functions.1", "SMOKE"]
     })
 ```
 
@@ -747,7 +870,7 @@ MCP TOOL: nlspec_delete
 
 ---
 
-## 7. Error Model
+## Errors
 
 ```
 NlspecError
@@ -773,7 +896,7 @@ NlspecError
 
 ---
 
-## 8. Configuration
+## Config
 
 ```
 CONFIG server:
@@ -814,7 +937,7 @@ CONFIG search:
 
 ---
 
-## 9. Deployment Artifacts
+## Deployment
 
 ```
 Distribution: npm package @nlspec/server
@@ -843,12 +966,12 @@ Claude Code configuration (.mcp.json in project root):
 
 ---
 
-## 10. Scenarios
+## Scenarios
 
-### 10.1 Happy Path
+### Scenarios.1 Happy Path
 
 ```
-SCENARIO 1: Init project and load spec  [SEC:5.2] [SEC:6.1] [SMOKE]
+SCENARIO 1: Init project and load spec  [SEC:Functions.2] [SEC:API.1] [SMOKE]
   GIVEN:
   - Empty directory at /tmp/test-project
   WHEN:
@@ -858,18 +981,18 @@ SCENARIO 1: Init project and load spec  [SEC:5.2] [SEC:6.1] [SMOKE]
   - /tmp/test-project/.nlspec/index.sqlite exists
   - Returned spec has id "myservice", status "Draft"
 
-SCENARIO 2: Parse kv-store spec and get section  [SEC:5.1] [SEC:5.2] [SEC:6.2] [SMOKE]
+SCENARIO 2: Parse kv-store spec and get section  [SEC:Functions.1] [SEC:Functions.2] [SEC:API.2] [SMOKE]
   GIVEN:
   - Project with kv-store-spec.md loaded
   WHEN:
-  - Call nlspec_get({spec_id: "kv-store", section: "5.1"})
+  - Call nlspec_get({spec_id: "kv-store", section: "Functions.1"})
   THEN:
-  - Returns Section 5.1 with 5 FUNCTIONs: storage_get, storage_set, storage_delete,
+  - Returns Functions.1 with 5 FUNCTIONs: storage_get, storage_set, storage_delete,
     storage_list, storage_stats
   - Each FUNCTION has element_type "FUNCTION"
   - storage_get has references: USES Entry, THROWS KeyNotFound, THROWS KeyExpired
 
-SCENARIO 3: Search by reference  [SEC:5.3] [SEC:6.3] [SMOKE]
+SCENARIO 3: Search by reference  [SEC:Functions.3] [SEC:API.3] [SMOKE]
   GIVEN:
   - Project with kv-store-spec.md loaded
   WHEN:
@@ -879,23 +1002,23 @@ SCENARIO 3: Search by reference  [SEC:5.3] [SEC:6.3] [SMOKE]
   - Does NOT return storage_stats (it USES StoreStats, not Entry)
   - Each result has match_reason containing "USES Entry"
 
-SCENARIO 4: Create a new scenario  [SEC:5.2] [SEC:6.4]
+SCENARIO 4: Create a new scenario  [SEC:Functions.2] [SEC:API.4]
   GIVEN:
   - Project with kv-store-spec.md loaded
-  - Section 10 exists with existing scenarios
+  - Scenarios section exists with existing scenarios
   WHEN:
-  - Call nlspec_create({spec_id: "kv-store", section: "10", element_type: "SCENARIO",
-    name: "SCENARIO 50: Empty list returns empty", content: "SCENARIO 50: ...", tags: ["SEC:5.1"]})
+  - Call nlspec_create({spec_id: "kv-store", section: "Scenarios", element_type: "SCENARIO",
+    name: "SCENARIO 50: Empty list returns empty", content: "SCENARIO 50: ...", tags: ["SEC:Functions.1"]})
   - Call nlspec_list({spec_id: "kv-store", element_type: "SCENARIO"})
   THEN:
   - Create returns element with id "kv-store:10:scenario:SCENARIO 50"
   - List includes SCENARIO 50 among the results
-  - kv-store-spec.md file contains the new scenario text in Section 10
+  - kv-store-spec.md file contains the new scenario text in Scenarios section
 
-SCENARIO 5: Update an element  [SEC:5.2] [SEC:6.4]
+SCENARIO 5: Update an element  [SEC:Functions.2] [SEC:API.4]
   GIVEN:
   - Project with kv-store-spec.md loaded
-  - Entry RECORD exists in Section 4.1
+  - Entry RECORD exists in DataModel.1
   WHEN:
   - Call nlspec_update({element_id: "kv-store:4.1:record:Entry",
     content: "RECORD Entry:\n  key: String\n  value: String\n  version: u64\n  new_field: bool\n\n  USED BY: storage_get, storage_set"})
@@ -904,7 +1027,7 @@ SCENARIO 5: Update an element  [SEC:5.2] [SEC:6.4]
   - kv-store-spec.md file reflects the change
   - SQLite index is updated
 
-SCENARIO 6: List with filters  [SEC:5.2] [SEC:6.2]
+SCENARIO 6: List with filters  [SEC:Functions.2] [SEC:API.2]
   GIVEN:
   - Project with kv-store-spec.md loaded
   WHEN:
@@ -914,7 +1037,7 @@ SCENARIO 6: List with filters  [SEC:5.2] [SEC:6.2]
   - Does not return scenarios without [SMOKE] tag
   - Each result has tags containing "SMOKE"
 
-SCENARIO 7: Text search across specs  [SEC:5.3] [SEC:6.3]
+SCENARIO 7: Text search across specs  [SEC:Functions.3] [SEC:API.3]
   GIVEN:
   - Project with kv-store-spec.md loaded
   WHEN:
@@ -924,7 +1047,7 @@ SCENARIO 7: Text search across specs  [SEC:5.3] [SEC:6.3]
   - Returns FUNCTION storage_get (mentions expired entries)
   - Results are ranked by relevance (scenario with exact match scores higher)
 
-SCENARIO 8: Get references for an element  [SEC:5.3] [SEC:6.2]
+SCENARIO 8: Get references for an element  [SEC:Functions.3] [SEC:API.2]
   GIVEN:
   - Project with kv-store-spec.md loaded
   WHEN:
@@ -934,10 +1057,10 @@ SCENARIO 8: Get references for an element  [SEC:5.3] [SEC:6.2]
   - Each has a reference with ref_type USES and to_element "Entry"
 ```
 
-### 10.2 Error Scenarios
+### Scenarios.2 Error Scenarios
 
 ```
-SCENARIO 10: Get nonexistent element  [SEC:5.2] [SEC:7]
+SCENARIO 10: Get nonexistent element  [SEC:Functions.2] [SEC:Errors]
   GIVEN:
   - Project loaded
   WHEN:
@@ -945,16 +1068,16 @@ SCENARIO 10: Get nonexistent element  [SEC:5.2] [SEC:7]
   THEN:
   - Returns NotFound error with the requested element_id
 
-SCENARIO 11: Create duplicate  [SEC:5.2] [SEC:7]
+SCENARIO 11: Create duplicate  [SEC:Functions.2] [SEC:Errors]
   GIVEN:
   - Entry RECORD exists
   WHEN:
-  - Call nlspec_create({spec_id: "kv-store", section: "4.1", element_type: "RECORD",
+  - Call nlspec_create({spec_id: "kv-store", section: "DataModel.1", element_type: "RECORD",
     name: "Entry", content: "..."})
   THEN:
   - Returns AlreadyExists error
 
-SCENARIO 12: Delete referenced element  [SEC:5.2] [SEC:7]
+SCENARIO 12: Delete referenced element  [SEC:Functions.2] [SEC:Errors]
   GIVEN:
   - Entry RECORD is referenced by storage_get, storage_set, etc.
   WHEN:
@@ -963,7 +1086,7 @@ SCENARIO 12: Delete referenced element  [SEC:5.2] [SEC:7]
   - Returns ReferenceConflict error
   - Error includes list of referencing element IDs
 
-SCENARIO 13: Delete with force  [SEC:5.2] [SEC:7]
+SCENARIO 13: Delete with force  [SEC:Functions.2] [SEC:Errors]
   GIVEN:
   - Entry RECORD is referenced
   WHEN:
@@ -973,7 +1096,7 @@ SCENARIO 13: Delete with force  [SEC:5.2] [SEC:7]
   - broken_refs lists all now-dangling references
   - Markdown file no longer contains Entry RECORD
 
-SCENARIO 14: Parse malformed element  [SEC:5.1] [SEC:7]
+SCENARIO 14: Parse malformed element  [SEC:Functions.1] [SEC:Errors]
   GIVEN:
   - Markdown file with "RECORD BadDef" (missing colon)
   WHEN:
@@ -985,10 +1108,10 @@ SCENARIO 14: Parse malformed element  [SEC:5.1] [SEC:7]
   - Warning is logged
 ```
 
-### 10.3 Round-Trip Scenarios
+### Scenarios.3 Round-Trip Scenarios
 
 ```
-SCENARIO 20: Parse then render produces identical markdown  [SEC:5.1] [FULL]
+SCENARIO 20: Parse then render produces identical markdown  [SEC:Functions.1] [FULL]
   GIVEN:
   - kv-store-spec.md as input
   WHEN:
@@ -1002,10 +1125,10 @@ SCENARIO 20: Parse then render produces identical markdown  [SEC:5.1] [FULL]
   - Round-trip failures are blocking bugs.
 ```
 
-### 10.4 Persistence Scenarios
+### Scenarios.4 Persistence Scenarios
 
 ```
-SCENARIO 30: Changes survive restart  [SEC:5.2] [FULL]
+SCENARIO 30: Changes survive restart  [SEC:Functions.2] [FULL]
   GIVEN:
   - Project with kv-store-spec.md loaded
   - A new SCENARIO 50 was created via nlspec_create
@@ -1016,7 +1139,7 @@ SCENARIO 30: Changes survive restart  [SEC:5.2] [FULL]
   THEN:
   - SCENARIO 50 exists (was persisted to markdown + re-indexed on restart)
 
-SCENARIO 31: External edit triggers re-index  [SEC:5.2] [FULL]
+SCENARIO 31: External edit triggers re-index  [SEC:Functions.2] [FULL]
   GIVEN:
   - Project loaded, auto_reindex is true
   - Human manually edits kv-store-spec.md to add a new RECORD
@@ -1029,7 +1152,7 @@ SCENARIO 31: External edit triggers re-index  [SEC:5.2] [FULL]
 
 ---
 
-## 11. Dependencies
+## Dependencies
 
 ```
 DEPENDENCY @modelcontextprotocol/sdk:
@@ -1056,7 +1179,7 @@ DEPENDENCY chokidar:
 
 ---
 
-## 12. File Structure
+## FileStructure
 
 ```
 nlspec/
@@ -1114,7 +1237,7 @@ nlspec/
 
 ---
 
-## 13. Maintenance Workflow
+## Maintenance
 
 Standard nlspec maintenance process. Bug categories A/B/C, patch specs,
 scenario tiers [SMOKE]/[SEC:x.x]/[FULL].
@@ -1128,7 +1251,7 @@ scenario tiers [SMOKE]/[SEC:x.x]/[FULL].
 
 ---
 
-## 14. Build and Run
+## BuildAndRun
 
 ```
 ### Prerequisites
@@ -1160,7 +1283,7 @@ $ npx nlspec get --spec myservice --section 5.1
 
 ---
 
-## 15. Boundaries
+## Boundaries
 
 ```
 ### This System Does:
@@ -1204,7 +1327,7 @@ $ npx nlspec get --spec myservice --section 5.1
 
 ---
 
-## 16. Dependency Contracts
+## Contracts
 
 ```
 ### EXPORTS
@@ -1214,9 +1337,9 @@ EXPORT SpecParser:
   target      : spec_processing
   condition   : ALWAYS
   value       : "Ability to parse nlspec markdown into structured sections and elements
-                following the 16-section template format"
+                following the nlspec template format"
   override    : NEVER
-  source_ref  : [SEC:5.1]
+  source_ref  : [SEC:Functions.1]
 
 EXPORT SpecStore:
   type        : CONSTRAINT
@@ -1225,7 +1348,7 @@ EXPORT SpecStore:
   value       : "CRUD operations on spec elements with SQLite indexing and markdown
                 round-trip fidelity"
   override    : NEVER
-  source_ref  : [SEC:5.2]
+  source_ref  : [SEC:Functions.2]
 
 EXPORT QueryEngine:
   type        : CONSTRAINT
@@ -1233,7 +1356,7 @@ EXPORT QueryEngine:
   condition   : ALWAYS
   value       : "FTS5 text search and structural reference queries across spec elements"
   override    : NEVER
-  source_ref  : [SEC:5.3]
+  source_ref  : [SEC:Functions.3]
 
 EXPORT CRUDTools:
   type        : SEED_DATA
@@ -1242,7 +1365,7 @@ EXPORT CRUDTools:
   value       : "8 MCP tools: nlspec_init, nlspec_get, nlspec_list, nlspec_search,
                 nlspec_create, nlspec_update, nlspec_delete"
   override    : NEVER
-  source_ref  : [SEC:6]
+  source_ref  : [SEC:API]
 
 EXPORT ElementTypes:
   type        : INVARIANT
@@ -1250,9 +1373,19 @@ EXPORT ElementTypes:
   condition   : ALWAYS
   value       : "ElementType enum: RECORD, FUNCTION, ENDPOINT, SCENARIO, ENUM, ALIAS,
                 CONFIG, IMAGE, MANIFEST, INFRA, PIPELINE, TOPOLOGY, CONTRACT,
-                FAILURE_MODE, IMPORT, PROSE"
+                FAILURE_MODE, IMPORT, DEPENDENCY, ARTIFACT, PATTERN_REF, ASSET_REF,
+                EXPORT, EXPECTS, RULE, TOKEN, LOCALE, STRING_CLASS, PROSE"
   override    : NEVER
-  source_ref  : [SEC:4]
+  source_ref  : [SEC:DataModel]
+
+EXPORT SpecTypes:
+  type        : INVARIANT
+  target      : spec_metadata
+  condition   : ALWAYS
+  value       : "SpecType enum: SYSTEM, PATTERN, ASSET. Parsed from Type: header.
+                Defaults to SYSTEM if not specified."
+  override    : NEVER
+  source_ref  : [SEC:DataModel]
 
 ### EXPECTS
 
@@ -1260,7 +1393,7 @@ EXPECTS: none — this spec is a root dependency with no imports.
 
 ### CONFLICT RESOLUTION
 
-Standard rules from NLSPEC-TEMPLATE Section 16 apply.
+Standard rules from NLSPEC-TEMPLATE Contracts section apply.
 All exports are override=NEVER because this is foundational infrastructure.
 ```
 
@@ -1269,7 +1402,7 @@ All exports are override=NEVER because this is foundational infrastructure.
 ## Appendix A: Glossary
 
 ```
-nlspec:          Natural Language Specification — markdown document following the 16-section template
+nlspec:          Natural Language Specification — markdown document following the nlspec template
 SpecElement:     Parsed, structured unit (RECORD, FUNCTION, SCENARIO, etc.)
 MCP:             Model Context Protocol — agents use this to call nlspec tools
 Bootstrap:       This spec is implemented first, then manages everything including itself

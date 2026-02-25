@@ -3,6 +3,7 @@
 > **Version:** 0.1.0
 > **Author:** Divyendu Deepak Singh
 > **Date:** February 2026
+> **Type:** SYSTEM
 > **License:** CC-BY-4.0
 
 > **IMPORT:** This spec imports from `nlspec/bootstrap` (specs/bootstrap-spec.md).
@@ -31,7 +32,7 @@
 
 ---
 
-## 1. Abstract
+## Abstract
 
 The nlspec MCP Server extends the bootstrap system (parser, store, query engine, 8 CRUD
 tools) with context slicing, patch management, spec validation, graph operations,
@@ -47,7 +48,7 @@ This spec supports the phase transitions described in NLSPEC-SYSTEM.md:
 
 ---
 
-## 2. Problem Statement
+## Problem Statement
 
 ### Current State
 The bootstrap system provides CRUD + search on spec elements. An agent can read, write,
@@ -81,7 +82,7 @@ it back.
 
 ---
 
-## 3. Architecture Overview
+## Architecture Overview
 
 ```
 +-----------------------------------------------------------+
@@ -125,7 +126,7 @@ it back.
 +-----------------------------------------------------------+
 ```
 
-### 3.1 Component Inventory (additions to bootstrap)
+### Architecture.1 Component Inventory (additions to bootstrap)
 
 ### Component: Context Slicer
 - **Responsibility:** Given a section or scenario, trace USES/USED BY/IMPORT edges and
@@ -165,15 +166,15 @@ it back.
 - **Called by:** Core Engine, all MCP tools
 - **Lifecycle:** Persistent across sessions
 
-### 3.2 Data Flows (additions to bootstrap)
+### Architecture.2 Data Flows (additions to bootstrap)
 
 ### Flow: Agent requests a context slice for a bug fix
 1. Agent calls `nlspec_slice({namespace: "myproject", spec_id: "auth", scenario: 7})`
 2. MCP Server routes to Context Slicer
-3. Context Slicer reads SCENARIO 7, extracts [SEC:5.3] [SEC:4.1] tags
-4. Context Slicer reads Section 5.3, extracts USES: QueryRequest, QueryResponse
-5. Context Slicer reads Section 4 for QueryRequest, QueryResponse RECORDs
-6. Context Slicer reads Section 5.3 THROWS, pulls relevant errors from Section 7
+3. Context Slicer reads SCENARIO 7, extracts [SEC:Functions.3] [SEC:DataModel.1] tags
+4. Context Slicer reads Functions.3, extracts USES: QueryRequest, QueryResponse
+5. Context Slicer reads DataModel for QueryRequest, QueryResponse RECORDs
+6. Context Slicer reads Functions.3 THROWS, pulls relevant errors from Errors
 7. If any USES target is an IMPORT, follows cross-spec reference (may cross namespaces)
 8. Assembles all elements into a context slice
 9. Returns the slice
@@ -191,12 +192,12 @@ Latency budget: < 500ms (first import, includes full parse)
 
 ---
 
-## 4. Data Model
+## DataModel
 
 IMPORT Spec, Section, SpecElement, Reference, SpecMetadata, SearchResult,
-       SpecImport, ElementType, ReferenceType FROM nlspec/bootstrap Section 4
+       SpecImport, ElementType, ReferenceType FROM nlspec/bootstrap DataModel
 
-### 4.1 Additional Records
+### DataModel.1 Additional Records
 
 ```
 RECORD Namespace:
@@ -213,7 +214,7 @@ RECORD Namespace:
 
 ```
 RECORD ContextSlice:
-  trigger      : String              -- what caused the slice (e.g., "SCENARIO 7", "Section 5.3")
+  trigger      : String              -- what caused the slice (e.g., "SCENARIO 7", "Functions.3")
   elements     : List<SpecElement>   -- the assembled elements, ordered by section then position
   total_lines  : u64                 -- approximate rendered size in lines
   specs_touched: List<String>        -- which specs contributed elements (may cross namespaces)
@@ -229,7 +230,7 @@ RECORD Patch:
   spec_id      : String              -- which spec this patches
   category     : PatchCategory       -- A (spec deficiency), B (impl error), C (missing capability)
   status       : PatchStatus         -- ACTIVE, ABSORBED, REJECTED
-  sections     : List<String>        -- affected section numbers
+  sections     : List<String>        -- affected section names
   scenarios    : List<String>        -- failing scenario numbers
   description  : String              -- what the patch fixes
   content      : String              -- the patch spec markdown content
@@ -244,9 +245,11 @@ RECORD Patch:
 RECORD ValidationResult:
   namespace    : String
   spec_id      : String
+  parse_mode   : String              -- "strict" (has SECTIONS) or "loose" (discovered)
   errors       : List<ValidationError>
   warnings     : List<ValidationWarning>
-  is_valid     : bool                -- true if zero errors (warnings are OK)
+  gaps         : GapReport           -- structural gap analysis (from bootstrap parser)
+  is_valid     : bool                -- true if zero errors (warnings and gaps are OK)
 
   USED BY: spec_validator, nlspec_validate
 ```
@@ -270,7 +273,7 @@ RECORD ValidationWarning:
   USED BY: spec_validator
 ```
 
-### 4.2 Additional Enumerations
+### DataModel.2 Additional Enumerations
 
 ```
 ENUM PatchCategory:
@@ -286,13 +289,13 @@ ENUM PatchStatus:
   REJECTED
 ```
 
-### 4.3 Namespace-Qualified Identifiers
+### DataModel.3 Namespace-Qualified Identifiers
 
 All spec identifiers become namespace-qualified:
 
 ```
 Full element ID:   {namespace}/{spec_id}:{section}:{type}:{name}
-Example:           myproject/auth:5.3:function:validate_token
+Example:           myproject/auth:Functions.3:function:validate_token
 
 Short spec ID:     {namespace}/{spec_id}
 Example:           nlspec/bootstrap
@@ -307,9 +310,9 @@ parameter. Existing behavior is preserved when namespace is not specified.
 
 ---
 
-## 5. Core Functions
+## Functions
 
-### 5.1 Context Slicer
+### Functions.1 Context Slicer
 
 ```
 FUNCTION slice_for_scenario(namespace: String, spec_id: SpecId, scenario_number: u64) -> ContextSlice
@@ -326,7 +329,7 @@ FUNCTION slice_for_scenario(namespace: String, spec_id: SpecId, scenario_number:
      d. For each USES/THROWS target, if it's an IMPORT, resolve cross-spec (may cross namespaces)
   4. Collect the scenario itself + all reached elements
   5. Remove duplicates
-  6. Order by: section number ascending, then element position
+  6. Order by: declaration order, then element position
   7. Build the trace (dependency chain as human-readable string)
   8. Return ContextSlice
 
@@ -341,7 +344,7 @@ FUNCTION slice_for_scenario(namespace: String, spec_id: SpecId, scenario_number:
 ```
 
 ```
-FUNCTION slice_for_section(namespace: String, spec_id: SpecId, section: SectionNumber) -> ContextSlice
+FUNCTION slice_for_section(namespace: String, spec_id: SpecId, section: SectionName) -> ContextSlice
   USES: ContextSlice
   THROWS: NotFound
 
@@ -352,10 +355,10 @@ FUNCTION slice_for_section(namespace: String, spec_id: SpecId, section: SectionN
   4. Assemble and return ContextSlice
 ```
 
-### 5.2 Patch Manager
+### Functions.2 Patch Manager
 
 ```
-FUNCTION patch_create(namespace: String, spec_id: SpecId, category: PatchCategory, sections: List<SectionNumber>, scenarios: List<u64>, description: String, content: String) -> Patch
+FUNCTION patch_create(namespace: String, spec_id: SpecId, category: PatchCategory, sections: List<SectionName>, scenarios: List<u64>, description: String, content: String) -> Patch
   USES: Patch
   THROWS: IOError
 
@@ -394,34 +397,49 @@ FUNCTION patch_absorb(patch_id: String) -> Patch
     throw PatchConflict — human must resolve
 ```
 
-### 5.3 Spec Validator
+### Functions.3 Spec Validator
 
 ```
 FUNCTION validate_spec(namespace: String, spec_id: SpecId) -> ValidationResult
-  USES: ValidationResult, ValidationError, ValidationWarning
+  USES: ValidationResult, ValidationError, ValidationWarning, GapReport
   THROWS: NotFound
 
   BEHAVIOR:
-  1. Check all required sections exist (1-15 per nlspec template standard)
-  2. Check all References resolve:
+  1. Load the spec. Determine parse mode from the Spec record:
+     - If section_decl was parsed from a SECTIONS block → strict mode
+     - If section_decl was inferred from ## headers → loose mode
+  2. Run gap analysis (bootstrap parser's analyze_gaps). Attach GapReport.
+  3. Check all References resolve:
      a. Every USES target exists as a RECORD or ENUM
-     b. Every THROWS target exists in the Error Model section
+     b. Every THROWS target exists in the error definitions
      c. Every IMPORT target exists in the referenced spec (may cross namespaces)
      d. Every [SEC:x.x] tag references an existing section
-  3. Check symmetry: if A USES B, B should have USED BY A
-  4. Check all SCENARIOs have at least one [SEC:] tag
-  5. Check all FUNCTIONs have USES and THROWS declarations
-  6. Produce warnings for:
+  4. Check symmetry: if A USES B, B should have USED BY A
+  5. (Strict mode only) Check declared sections vs present sections:
+     a. Sections in declaration but missing from markdown → error
+     b. Sections in markdown but not in declaration → warning
+  6. (Both modes) Check element completeness:
+     a. All SCENARIOs have at least one [SEC:] tag
+     b. All FUNCTIONs have USES and THROWS declarations
+  7. Produce warnings for:
      a. RECORDs with no USED BY (orphaned records)
      b. Sections with no SCENARIOs (untested sections)
      c. FUNCTIONs with no PERFORMANCE targets
-  7. Return ValidationResult
+     d. (Loose mode) No SECTIONS block — suggest adding one for better tooling
+  8. Return ValidationResult with parse_mode, errors, warnings, and gaps
+
+  NOTES:
+  - The validator NEVER refuses a spec. Even a minimal markdown file gets validated.
+  - Gaps are advisory. is_valid is based on errors only (not warnings or gaps).
+  - In loose mode, "missing declared sections" checks don't apply.
+  - The completeness score in GapReport is a rough measure: 1.0 means no gaps,
+    0.0 means the spec is essentially empty.
 
   PERFORMANCE:
   - Target: < 500ms for a project with 10 specs
 ```
 
-### 5.4 Graph Engine
+### Functions.4 Graph Engine
 
 ```
 FUNCTION compute_graph(namespace: String | None, spec_id: SpecId | None, element_id: ElementId | None, depth: u64, direction: String) -> Graph
@@ -439,7 +457,7 @@ FUNCTION compute_graph(namespace: String | None, spec_id: SpecId | None, element
     edges: List<{from: ElementId, to: ElementId, ref_type: ReferenceType}>
 ```
 
-### 5.5 Namespace Manager
+### Functions.5 Namespace Manager
 
 ```
 FUNCTION namespace_create(name: String) -> Namespace
@@ -472,7 +490,7 @@ FUNCTION namespace_import(namespace: String, spec_id: String, path: String) -> S
   - Re-importing overwrites the existing index (re-parse from file)
 ```
 
-### 5.6 Spec Decomposition
+### Functions.6 Spec Decomposition
 
 ```
 RECORD SplitSuggestion:
@@ -486,7 +504,7 @@ RECORD SplitSuggestion:
 ```
 RECORD SplitCluster:
   name         : String               -- suggested spec name (e.g., "auth", "storage")
-  sections     : List<String>         -- section numbers in this cluster
+  sections     : List<String>         -- section names in this cluster
   elements     : List<String>         -- element IDs in this cluster
   element_count: u64                  -- number of elements
   rationale    : String               -- why these elements cluster together
@@ -504,8 +522,8 @@ FUNCTION spec_split_suggest(namespace: String, spec_id: SpecId, strategy: String
   2. Apply clustering strategy:
      - "cluster": graph-based clustering — find groups of elements with dense
        internal references and sparse external references (community detection)
-     - "by_section": group by top-level section number (Sections 4-5 become
-       one spec, Section 6 becomes another, etc.)
+     - "by_section": group by top-level section name (DataModel + Functions become
+       one spec, the API section becomes another, etc.)
      - "by_concern": use element names and tags to identify domain clusters
        (auth-related, storage-related, api-related)
   3. For each cluster, identify cross-cluster references that will become IMPORTs
@@ -528,7 +546,7 @@ FUNCTION spec_split_execute(namespace: String, spec_id: SpecId, clusters: List<S
      a. Create a new spec file from the template
      b. Copy elements from the original spec into the new spec
      c. Add IMPORT declarations for cross-cluster references
-     d. Generate Section 15 (Boundaries) noting the split origin
+     d. Generate Boundaries section noting the split origin
   2. Update the original spec's IMPORT declarations to reference new specs
   3. Register all new specs under target_namespace
   4. Return the list of created specs
@@ -543,14 +561,14 @@ FUNCTION spec_split_execute(namespace: String, spec_id: SpecId, clusters: List<S
 
 ---
 
-## 6. API Surface — MCP Tools
+## API — MCP Tools
 
 Eight additional MCP tools. Each takes JSON parameters, returns JSON results.
 All bootstrap tools (nlspec_init, nlspec_get, nlspec_list, nlspec_search,
 nlspec_create, nlspec_update, nlspec_delete) remain available and now accept
 an optional `namespace` parameter.
 
-### 6.1 Import & Namespaces
+### API.1 Import & Namespaces
 
 ```
 MCP TOOL: nlspec_import
@@ -600,7 +618,7 @@ MCP TOOL: nlspec_namespaces
     -> Returns: [{name: "nlspec", specs: ["bootstrap", "mcp-server"]}]
 ```
 
-### 6.2 Context Slicing
+### API.2 Context Slicing
 
 ```
 MCP TOOL: nlspec_slice
@@ -611,7 +629,7 @@ MCP TOOL: nlspec_slice
     namespace    : String              -- spec namespace
     spec_id      : SpecId              -- which spec
     scenario     : u64 | None          -- slice for this scenario number
-    section      : SectionNumber | None -- slice for this section
+    section      : SectionName | None -- slice for this section
     format       : "json" | "markdown" -- output format (default: "markdown")
 
   RETURNS:
@@ -626,12 +644,12 @@ MCP TOOL: nlspec_slice
           elements: [...],
           total_lines: 287,
           specs_touched: ["myproject/auth", "myproject/storage"],
-          trace: ["SCENARIO 7 -> [SEC:5.3] -> FUNCTION validate_token -> USES TokenRecord -> ..."]
+          trace: ["SCENARIO 7 -> [SEC:Functions.3] -> FUNCTION validate_token -> USES TokenRecord -> ..."]
         }
       }
 ```
 
-### 6.3 Patch Management
+### API.3 Patch Management
 
 ```
 MCP TOOL: nlspec_patch_create
@@ -641,7 +659,7 @@ MCP TOOL: nlspec_patch_create
     namespace    : String
     spec_id      : SpecId
     category     : PatchCategory
-    sections     : List<SectionNumber>
+    sections     : List<SectionName>
     scenarios    : List<u64>
     description  : String
     content      : String              -- patch content in markdown
@@ -675,11 +693,14 @@ MCP TOOL: nlspec_patch_absorb
     spec         : Spec                -- updated with bumped version
 ```
 
-### 6.4 Validation
+### API.4 Validation
 
 ```
 MCP TOOL: nlspec_validate
-  DESCRIPTION: Validate a spec's structural integrity.
+  DESCRIPTION: Validate a spec's structural integrity and detect gaps.
+  Returns parse mode (strict/loose), validation errors, warnings, and a
+  GapReport with severity-categorized structural gaps. Works with any spec
+  regardless of how well-structured it is — never refuses a spec.
 
   PARAMETERS:
     namespace    : String
@@ -694,18 +715,63 @@ MCP TOOL: nlspec_validate
         result: {
           namespace: "myproject",
           spec_id: "auth",
+          parse_mode: "strict",
           is_valid: false,
-          errors: [{element_id: "myproject/auth:5.3:function:validate_token",
+          errors: [{element_id: "myproject/auth:Functions.3:function:validate_token",
                     error_type: "dangling_reference",
                     message: "USES TokenRecord but no RECORD named TokenRecord found"}],
-          warnings: [{element_id: "myproject/auth:4.2:record:SessionStats",
+          warnings: [{element_id: "myproject/auth:DataModel.2:record:SessionStats",
                      warning_type: "orphaned",
-                     message: "RECORD SessionStats has no USED BY references"}]
+                     message: "RECORD SessionStats has no USED BY references"}],
+          gaps: {
+            spec_id: "auth",
+            mode: "strict",
+            critical: [{severity: "CRITICAL", code: "GAP-002",
+                       message: "FUNCTION validate_token references undefined RECORD TokenRecord",
+                       section: "Functions.3", elements: ["validate_token", "TokenRecord"],
+                       suggestion: "Add RECORD TokenRecord to DataModel or fix the USES reference"}],
+            warnings: [{severity: "WARNING", code: "GAP-007",
+                       message: "RECORD SessionStats has no USED BY references",
+                       section: "DataModel.2", elements: ["SessionStats"],
+                       suggestion: "Add USED BY or remove if truly unused"}],
+            info: [],
+            completeness: 0.82
+          }
+        }
+      }
+
+  EXAMPLE (loose spec):
+    nlspec_validate({namespace: "sandbox", spec_id: "quick-prototype"})
+    -> Returns: {
+        result: {
+          namespace: "sandbox",
+          spec_id: "quick-prototype",
+          parse_mode: "loose",
+          is_valid: true,
+          errors: [],
+          warnings: [],
+          gaps: {
+            spec_id: "quick-prototype",
+            mode: "loose",
+            critical: [{severity: "CRITICAL", code: "GAP-001",
+                       message: "No Scenarios section — nothing to validate against",
+                       section: null, elements: [],
+                       suggestion: "Add a Scenarios section with at least one SCENARIO"}],
+            warnings: [{severity: "WARNING", code: "GAP-005",
+                       message: "3 FUNCTIONs lack USES declarations",
+                       section: "Core", elements: ["handle_request", "process_data", "emit_result"],
+                       suggestion: "Add USES declarations for context slicing support"}],
+            info: [{severity: "INFO", code: "GAP-011",
+                   message: "No SECTIONS declaration — parser is in loose mode",
+                   section: null, elements: [],
+                   suggestion: "Add a SECTIONS block for better tooling and completeness checking"}],
+            completeness: 0.45
+          }
         }
       }
 ```
 
-### 6.5 Graph Operations
+### API.5 Graph Operations
 
 ```
 MCP TOOL: nlspec_graph
@@ -727,7 +793,7 @@ MCP TOOL: nlspec_graph
   - Graph traversal crosses namespace boundaries when following IMPORT references
 ```
 
-### 6.6 Spec Decomposition
+### API.6 Spec Decomposition
 
 ```
 MCP TOOL: nlspec_split
@@ -750,15 +816,15 @@ MCP TOOL: nlspec_split
     -> Returns: {
         suggestion: {
           clusters: [
-            {name: "auth", sections: ["4.1", "4.2", "5.1", "5.2"], element_count: 47,
+            {name: "auth", sections: ["DataModel.1", "DataModel.2", "Functions.1", "Functions.2"], element_count: 47,
              rationale: "Dense references between auth records and auth functions"},
-            {name: "storage", sections: ["4.3", "5.3", "5.4"], element_count: 31,
+            {name: "storage", sections: ["DataModel.3", "Functions.3", "Functions.4"], element_count: 31,
              rationale: "Storage records and functions form isolated subgraph"},
-            {name: "api", sections: ["6.1", "6.2", "6.3"], element_count: 22,
+            {name: "api", sections: ["API.1", "API.2", "API.3"], element_count: 22,
              rationale: "API endpoints reference auth and storage but are self-contained"}
           ],
           cross_refs: [
-            {from: "auth:5.1:function:validate_token", to: "storage:4.3:record:Session"},
+            {from: "auth:Functions.1:function:validate_token", to: "storage:DataModel.3:record:Session"},
             ...
           ],
           estimated_lines: [850, 620, 440]
@@ -778,11 +844,84 @@ MCP TOOL: nlspec_split
   - execute=true requires human confirmation (the tool asks before proceeding)
 ```
 
+### API.7 Drift Detection
+
+```
+MCP TOOL: nlspec_drift
+  DESCRIPTION: Compare a spec's declarations against the actual codebase to detect
+  divergence. Checks API endpoints, data model records, error types, config schema,
+  and artifact outputs. Returns a structured drift report.
+
+  The agent provides the code analysis — the tool provides the spec side. The agent
+  reads code files and calls this tool with what it found. The tool compares against
+  the spec's declarations and reports mismatches.
+
+  PARAMETERS:
+    namespace    : String
+    spec_id      : SpecId
+    code_surface : {                    -- what the agent found in the code
+      endpoints  : List<{method: String, path: String, params: List<String>}> | None
+      records    : List<{name: String, fields: List<{name: String, type: String}>}> | None
+      errors     : List<{name: String, code: String}> | None
+      configs    : List<{key: String, type: String, default: String}> | None
+      artifacts  : List<{name: String, path: String, exists: bool}> | None
+    }
+
+  RETURNS:
+    drift_report : {
+      spec_id    : String,
+      clean      : bool,                -- true if no drift detected
+      drifted    : List<{
+        category : "API" | "DATA_MODEL" | "ERROR" | "CONFIG" | "ARTIFACT",
+        element  : String,              -- element name
+        spec_says: String,              -- what the spec declares
+        code_says: String,              -- what the agent found in code
+        severity : "MISSING_IN_CODE" | "EXTRA_IN_CODE" | "MISMATCH"
+      }>
+    }
+
+  EXAMPLE:
+    nlspec_drift({
+      namespace: "myproject", spec_id: "auth",
+      code_surface: {
+        endpoints: [
+          {method: "POST", path: "/auth/login", params: ["username", "password"]},
+          {method: "GET", path: "/auth/status", params: []},
+          {method: "DELETE", path: "/auth/purge", params: ["before_date"]}
+        ],
+        records: [
+          {name: "Token", fields: [{name: "id", type: "String"}, {name: "expires", type: "Timestamp"}]}
+        ]
+      }
+    })
+    -> Returns: {
+        drift_report: {
+          spec_id: "auth",
+          clean: false,
+          drifted: [
+            {category: "API", element: "DELETE /auth/purge",
+             spec_says: "not declared", code_says: "DELETE /auth/purge with param before_date",
+             severity: "EXTRA_IN_CODE"},
+            {category: "DATA_MODEL", element: "Token.user_id",
+             spec_says: "field user_id: UserId", code_says: "field not present",
+             severity: "MISSING_IN_CODE"}
+          ]
+        }
+      }
+
+  NOTES:
+  - The agent is responsible for reading code and extracting the code_surface.
+    This tool only compares against the spec.
+  - Drift is advisory — EXTRA_IN_CODE might mean the spec needs updating,
+    MISSING_IN_CODE might mean the code needs fixing. The agent reports, humans decide.
+  - Used automatically during VALIDATE and CONSOLIDATE modes.
+```
+
 ---
 
-## 7. Error Model
+## Errors
 
-IMPORT NlspecError, ParseError, NotFound, IOError FROM nlspec/bootstrap Section 7
+IMPORT NlspecError, ParseError, NotFound, IOError FROM nlspec/bootstrap Errors
 
 Additional errors:
 
@@ -797,9 +936,9 @@ NlspecError (extended)
 
 ---
 
-## 8. Configuration
+## Config
 
-IMPORT all config from nlspec/bootstrap Section 8
+IMPORT all config from nlspec/bootstrap Config
 
 Additional configuration:
 
@@ -837,9 +976,9 @@ CONFIG nlspec.import.auto_namespace
 
 ---
 
-## 9. Deployment Artifacts
+## Deployment Artifacts
 
-### 9.1 Distribution
+### Deployment.1 Distribution
 
 ```
 Distribution: npm package @nlspec/server
@@ -850,7 +989,7 @@ The bootstrap tools are always available. The advanced tools (slice, patch,
 validate, graph, import, namespaces) are part of the same server binary.
 ```
 
-### 9.2 MCP Configuration
+### Deployment.2 MCP Configuration
 
 ```json
 {
@@ -865,23 +1004,23 @@ validate, graph, import, namespaces) are part of the same server binary.
 
 ---
 
-## 10. Scenarios
+## Scenarios
 
-### 10.1 Self-Bootstrap
+### Scenarios.1 Self-Bootstrap
 
 ```
-SCENARIO 1: System imports its own specs                            [SEC:6.1] [SMOKE]
+SCENARIO 1: System imports its own specs                            [SEC:API.1] [SMOKE]
   GIVEN: nlspec MCP server is running with no specs loaded
   WHEN: Agent calls nlspec_import({namespace: "nlspec", spec_id: "bootstrap", path: "specs/bootstrap-spec.md"})
   AND: Agent calls nlspec_import({namespace: "nlspec", spec_id: "mcp-server", path: "specs/mcp-server-spec.md"})
   THEN:
   - nlspec_namespaces returns [{name: "nlspec", specs: ["bootstrap", "mcp-server"]}]
-  - nlspec_get({namespace: "nlspec", spec_id: "bootstrap", section: "4.1"}) returns Spec record
+  - nlspec_get({namespace: "nlspec", spec_id: "bootstrap", section: "DataModel.1"}) returns Spec record
   - nlspec_search({namespace: "nlspec", query: "ContextSlice"}) finds the record in mcp-server spec
 ```
 
 ```
-SCENARIO 2: System validates its own specs                          [SEC:6.4] [SMOKE]
+SCENARIO 2: System validates its own specs                          [SEC:API.4] [SMOKE]
   GIVEN: Both nlspec specs are imported (SCENARIO 1 complete)
   WHEN: Agent calls nlspec_validate({namespace: "nlspec", spec_id: "bootstrap"})
   THEN: result.is_valid is true, zero errors
@@ -889,15 +1028,15 @@ SCENARIO 2: System validates its own specs                          [SEC:6.4] [S
   THEN: result.is_valid is true, zero errors
 ```
 
-### 10.2 Context Slicing
+### Scenarios.2 Context Slicing
 
 ```
-SCENARIO 3: Slice for a scenario                                    [SEC:6.2] [SEC:5.1]
+SCENARIO 3: Slice for a scenario                                    [SEC:API.2] [SEC:Functions.1]
   GIVEN: A spec "myproject/auth" is imported with:
-    - Section 4.1: RECORD TokenRecord
-    - Section 5.3: FUNCTION validate_token (USES: TokenRecord, THROWS: AuthError)
-    - Section 7: AuthError definition
-    - Section 10: SCENARIO 7 tagged [SEC:5.3]
+    - DataModel.1: RECORD TokenRecord
+    - Functions.3: FUNCTION validate_token (USES: TokenRecord, THROWS: AuthError)
+    - Errors: AuthError definition
+    - Scenarios: SCENARIO 7 tagged [SEC:Functions.3]
   WHEN: Agent calls nlspec_slice({namespace: "myproject", spec_id: "auth", scenario: 7})
   THEN:
   - slice.trigger is "SCENARIO 7"
@@ -907,23 +1046,23 @@ SCENARIO 3: Slice for a scenario                                    [SEC:6.2] [S
 ```
 
 ```
-SCENARIO 4: Slice follows cross-namespace imports                   [SEC:6.2] [SEC:5.1]
-  GIVEN: "myproject/auth" has IMPORT UserRecord FROM myproject/users Section 4.1
-  AND: "myproject/users" is imported with Section 4.1 containing RECORD UserRecord
+SCENARIO 4: Slice follows cross-namespace imports                   [SEC:API.2] [SEC:Functions.1]
+  GIVEN: "myproject/auth" has IMPORT UserRecord FROM myproject/users DataModel.1
+  AND: "myproject/users" is imported with DataModel.1 containing RECORD UserRecord
   WHEN: Agent calls nlspec_slice({namespace: "myproject", spec_id: "auth", scenario: 7})
   AND: SCENARIO 7's dependency chain reaches IMPORT UserRecord
   THEN: slice.elements includes UserRecord from myproject/users
   AND: slice.specs_touched includes "myproject/auth" and "myproject/users"
 ```
 
-### 10.3 Patch Management
+### Scenarios.3 Patch Management
 
 ```
-SCENARIO 5: Patch lifecycle                                         [SEC:6.3] [SEC:5.2]
+SCENARIO 5: Patch lifecycle                                         [SEC:API.3] [SEC:Functions.2]
   GIVEN: "myproject/auth" spec is imported, version "0.1.0"
   WHEN: Agent calls nlspec_patch_create({
     namespace: "myproject", spec_id: "auth",
-    category: "IMPL_ERROR", sections: ["5.3"], scenarios: [7],
+    category: "IMPL_ERROR", sections: ["Functions.3"], scenarios: [7],
     description: "validate_token does not check expiry",
     content: "FUNCTION validate_token: add step 3: check token.expires_at > now()"
   })
@@ -935,10 +1074,10 @@ SCENARIO 5: Patch lifecycle                                         [SEC:6.3] [S
   AND: Spec version is "0.1.1"
 ```
 
-### 10.4 Validation
+### Scenarios.4 Validation
 
 ```
-SCENARIO 6: Detect dangling reference                               [SEC:6.4] [SEC:5.3]
+SCENARIO 6: Detect dangling reference                               [SEC:API.4] [SEC:Functions.3]
   GIVEN: A spec where FUNCTION foo USES: BarRecord, but no RECORD BarRecord exists
   WHEN: Agent calls nlspec_validate for that spec
   THEN: result.is_valid is false
@@ -946,27 +1085,27 @@ SCENARIO 6: Detect dangling reference                               [SEC:6.4] [S
 ```
 
 ```
-SCENARIO 7: Detect orphaned record                                  [SEC:6.4] [SEC:5.3]
+SCENARIO 7: Detect orphaned record                                  [SEC:API.4] [SEC:Functions.3]
   GIVEN: A spec where RECORD OrphanedThing exists but no FUNCTION has USES: OrphanedThing
   WHEN: Agent calls nlspec_validate for that spec
   THEN: warnings contains {warning_type: "orphaned", message contains "OrphanedThing"}
   AND: result.is_valid is true (warnings don't fail validation)
 ```
 
-### 10.5 Graph Operations
+### Scenarios.5 Graph Operations
 
 ```
-SCENARIO 8: Graph shows incoming dependencies                       [SEC:6.5] [SEC:5.4]
+SCENARIO 8: Graph shows incoming dependencies                       [SEC:API.5] [SEC:Functions.4]
   GIVEN: RECORD Entry is USED BY: storage_get, storage_put, storage_delete
   WHEN: Agent calls nlspec_graph({element_id: "myproject/kv:4.1:record:Entry", direction: "incoming"})
   THEN: nodes includes storage_get, storage_put, storage_delete
   AND: edges show USED_BY relationships from each function to Entry
 ```
 
-### 10.6 Namespace Operations
+### Scenarios.6 Namespace Operations
 
 ```
-SCENARIO 9: Multiple namespaces coexist                             [SEC:6.1]
+SCENARIO 9: Multiple namespaces coexist                             [SEC:API.1]
   GIVEN: Specs imported under "nlspec" and "myproject" namespaces
   WHEN: Agent calls nlspec_search({query: "Spec"})
   THEN: Results include elements from BOTH namespaces
@@ -975,7 +1114,7 @@ SCENARIO 9: Multiple namespaces coexist                             [SEC:6.1]
 ```
 
 ```
-SCENARIO 10: Re-import refreshes index                              [SEC:6.1]
+SCENARIO 10: Re-import refreshes index                              [SEC:API.1]
   GIVEN: "myproject/auth" is imported
   WHEN: Human edits the markdown file (adds a new RECORD)
   AND: Agent calls nlspec_import with the same namespace/spec_id/path
@@ -983,14 +1122,14 @@ SCENARIO 10: Re-import refreshes index                              [SEC:6.1]
   AND: The old elements that still exist are preserved
 ```
 
-### 10.7 Spec Decomposition
+### Scenarios.7 Spec Decomposition
 
 ```
-SCENARIO 11: Suggest decomposition of a monolith spec               [SEC:6.6] [SEC:5.6]
-  GIVEN: "myproject/monolith" is imported with 300+ elements across 16 sections
-  AND: Sections 4.1-4.2, 5.1-5.2 have dense internal references (auth cluster)
-  AND: Sections 4.3, 5.3-5.4 have dense internal references (storage cluster)
-  AND: Sections 6.1-6.3 reference both clusters (api cluster)
+SCENARIO 11: Suggest decomposition of a monolith spec               [SEC:API.6] [SEC:Functions.6]
+  GIVEN: "myproject/monolith" is imported with 300+ elements across all sections
+  AND: DataModel.1-DataModel.2, Functions.1-Functions.2 have dense internal references (auth cluster)
+  AND: DataModel.3, Functions.3-Functions.4 have dense internal references (storage cluster)
+  AND: API.1-API.3 reference both clusters (api cluster)
   WHEN: Agent calls nlspec_split({namespace: "myproject", spec_id: "monolith",
                                    strategy: "cluster", execute: false})
   THEN: suggestion.clusters has 3 entries
@@ -1000,21 +1139,21 @@ SCENARIO 11: Suggest decomposition of a monolith spec               [SEC:6.6] [S
 ```
 
 ```
-SCENARIO 12: Execute decomposition creates new specs                 [SEC:6.6] [SEC:5.6]
+SCENARIO 12: Execute decomposition creates new specs                 [SEC:API.6] [SEC:Functions.6]
   GIVEN: SCENARIO 11 suggestion has been reviewed and approved
   WHEN: Agent calls nlspec_split({namespace: "myproject", spec_id: "monolith",
                                    strategy: "cluster", execute: true})
   THEN: Three new spec files are created
   AND: Each new spec has correct IMPORT declarations for cross-cluster references
-  AND: Each new spec follows the 16-section template
+  AND: Each new spec follows the nlspec template
   AND: Original monolith spec is preserved (not deleted)
   AND: nlspec_validate passes for all three new specs
 ```
 
 ```
-SCENARIO 13: Split preserves scenarios across clusters               [SEC:6.6] [SEC:5.6]
-  GIVEN: Original spec has SCENARIO 7 tagged [SEC:5.1] [SEC:5.3]
-  AND: Section 5.1 is in the "auth" cluster, Section 5.3 is in the "storage" cluster
+SCENARIO 13: Split preserves scenarios across clusters               [SEC:API.6] [SEC:Functions.6]
+  GIVEN: Original spec has SCENARIO 7 tagged [SEC:Functions.1] [SEC:Functions.3]
+  AND: Functions.1 is in the "auth" cluster, Functions.3 is in the "storage" cluster
   WHEN: Split is executed
   THEN: SCENARIO 7 appears in BOTH the auth spec and the storage spec
   AND: Each copy has appropriate [SEC:] tags for its own sections
@@ -1022,16 +1161,16 @@ SCENARIO 13: Split preserves scenarios across clusters               [SEC:6.6] [
 
 ---
 
-## 11. Dependencies
+## Dependencies
 
-IMPORT dependencies from nlspec/bootstrap Section 11
+IMPORT dependencies from nlspec/bootstrap Dependencies
 
 Additional: none. The MCP server spec uses only what bootstrap already provides
 (Node.js, @modelcontextprotocol/sdk, better-sqlite3, TypeScript).
 
 ---
 
-## 12. File Structure
+## FileStructure
 
 ```
 nlspec-project/
@@ -1055,9 +1194,9 @@ nlspec-project/
 
 ---
 
-## 13. Maintenance Workflow
+## Maintenance Workflow
 
-Same as bootstrap (Section 13) with one addition:
+Same as bootstrap (Maintenance) with one addition:
 
 **Self-maintenance:** Patches to the bootstrap spec or this spec follow the same
 workflow as any other spec. Create a patch with `nlspec_patch_create`, fix the
@@ -1074,7 +1213,7 @@ The system maintains itself.
 
 ---
 
-## 14. Build and Run
+## BuildAndRun and Run
 
 ### Prerequisites
 Same as bootstrap: Node.js >= 20, npm, TypeScript
@@ -1111,7 +1250,7 @@ nlspec_validate({namespace: "nlspec", spec_id: "mcp-server"})
 
 ---
 
-## 15. Boundaries
+## Boundaries
 
 ### This Spec Adds:
 - Context slicing (minimal context for bug fixes)
@@ -1142,7 +1281,7 @@ nlspec_validate({namespace: "nlspec", spec_id: "mcp-server"})
 
 ---
 
-## 16. Dependency Contracts
+## Contracts Contracts
 
 ```
 ### EXPORTS
@@ -1155,7 +1294,7 @@ EXPORT ContextSlicer:
                 element set for a bug fix or section change, following USES/THROWS/
                 SEC tags across spec boundaries"
   override    : NEVER
-  source_ref  : [SEC:5.1]
+  source_ref  : [SEC:Functions.1]
 
 EXPORT PatchManager:
   type        : POLICY
@@ -1164,7 +1303,7 @@ EXPORT PatchManager:
   value       : "Tracked patch lifecycle: create → list → absorb/reject. Patches are
                 temporary amendments absorbed at version bumps."
   override    : WITH_JUSTIFICATION
-  source_ref  : [SEC:5.2]
+  source_ref  : [SEC:Functions.2]
 
 EXPORT SpecValidator:
   type        : CONSTRAINT
@@ -1173,7 +1312,7 @@ EXPORT SpecValidator:
   value       : "Structural validation: dangling references, orphaned elements, missing
                 sections, untested sections, broken cross-spec imports"
   override    : NEVER
-  source_ref  : [SEC:5.3]
+  source_ref  : [SEC:Functions.3]
 
 EXPORT GraphEngine:
   type        : CONSTRAINT
@@ -1182,7 +1321,7 @@ EXPORT GraphEngine:
   value       : "Dependency graph queries: incoming/outgoing references, impact analysis,
                 cross-spec traversal"
   override    : NEVER
-  source_ref  : [SEC:5.4]
+  source_ref  : [SEC:Functions.4]
 
 EXPORT NamespaceManager:
   type        : SEED_DATA
@@ -1190,7 +1329,7 @@ EXPORT NamespaceManager:
   condition   : ALWAYS
   value       : "Namespace registry for organizing specs by project, team, or domain"
   override    : UNRESTRICTED
-  source_ref  : [SEC:5.5]
+  source_ref  : [SEC:Functions.5]
 
 EXPORT SplitEngine:
   type        : POLICY
@@ -1199,7 +1338,7 @@ EXPORT SplitEngine:
   value       : "Monolith spec analysis and decomposition into multiple specs with
                 correct IMPORT declarations"
   override    : WITH_JUSTIFICATION
-  source_ref  : [SEC:5.6]
+  source_ref  : [SEC:Functions.6]
 
 EXPORT ExtendedTools:
   type        : SEED_DATA
@@ -1210,7 +1349,7 @@ EXPORT ExtendedTools:
                 nlspec_patch_list, nlspec_patch_absorb, nlspec_seed_resolve,
                 nlspec_seed_audit"
   override    : NEVER
-  source_ref  : [SEC:6]
+  source_ref  : [SEC:API]
 
 ### EXPECTS
 
@@ -1244,7 +1383,7 @@ EXPECTS CRUDTools:
 
 ### CONFLICT RESOLUTION
 
-Standard rules from NLSPEC-TEMPLATE Section 16 apply.
+Standard rules from NLSPEC-TEMPLATE Contracts section apply.
 ```
 
 ---

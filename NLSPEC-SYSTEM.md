@@ -13,7 +13,7 @@ Nobody starts with an organizational spec. Everyone starts with one file.
 
 nlspec is designed around this reality. You start simple and grow into
 complexity. Each phase is self-contained — useful on its own, with a clear
-trigger for when you need the next one. The same 16-section template works
+trigger for when you need the next one. The same template works
 at every phase. The tooling meets you where you are.
 
 This applies to any system: a side project, a startup, an enterprise.
@@ -25,7 +25,7 @@ The spec system scales with the organization.
 
 **What you have:** A single spec file. A single agent. No tooling.
 
-**How it works:** Copy NLSPEC-TEMPLATE.md, fill in the 16 sections, hand it
+**How it works:** Copy NLSPEC-TEMPLATE.md, fill in the declared sections, hand it
 to an agent. The agent reads the markdown directly from the filesystem and
 implements your system.
 
@@ -108,6 +108,18 @@ from a failing scenario through imports into other specs and gets exactly what
 it needs. Validation catches dangling cross-spec references. Namespaces organize
 everything.
 
+**Seed resolution:** When specs declare Contracts section dependency contracts (EXPORTS
+and EXPECTS), the seed resolver walks the graph and produces a deterministic
+seed manifest — the complete initial state of the system. This means no manual
+configuration, no hidden defaults, no "works on my machine."
+
+**Spec types:** Not all specs produce running code. A TYPE: PATTERN spec defines
+a reusable architectural blueprint (e.g., a context stack pattern). A TYPE: ASSET
+spec defines static resources and design constraints (e.g., a design system with
+color tokens and typography rules). SYSTEM specs reference these via USES PATTERN
+and USES ASSET in Architecture.3. The agent applies patterns from training knowledge
+for well-known patterns, or reads the full PATTERN spec for novel ones.
+
 ```
 nlspec_import({namespace: "myproject", spec_id: "auth", path: "specs/auth-spec.md"})
 nlspec_import({namespace: "myproject", spec_id: "storage", path: "specs/storage-spec.md"})
@@ -127,31 +139,19 @@ nlspec_split({
 })
 → Returns: {
     clusters: [
-      {name: "auth", sections: ["4.1", "4.2", "5.1", "5.2"], elements: 47},
-      {name: "storage", sections: ["4.3", "5.3", "5.4"], elements: 31},
-      {name: "api", sections: ["6.1", "6.2", "6.3"], elements: 22}
+      {name: "auth", sections: ["DataModel.1", "DataModel.2", "Functions.1", "Functions.2"], elements: 47},
+      {name: "storage", sections: ["DataModel.3", "Functions.3", "Functions.4"], elements: 31},
+      {name: "api", sections: ["API.1", "API.2", "API.3"], elements: 22}
     ],
     cross_refs: [
-      {from: "auth:5.1:function:validate_token", to: "storage:4.3:record:Session"},
+      {from: "auth:Functions.1:function:validate_token", to: "storage:DataModel.3:record:Session"},
       ...
     ]
   }
 ```
 
 **Defined by:** `specs/mcp-server-spec.md` — context slicing, validation,
-graph operations, namespaces, `nlspec_import`, `nlspec_split`. And
-`specs/seed-resolver-spec.md` — dependency contract resolution, seed manifests.
-
-**Dependency contracts come alive here.** When specs import from each other,
-Section 16 (Dependency Contracts) defines what each spec EXPORTS to its consumers
-and what it EXPECTS from its dependencies. The seed resolver walks the full
-dependency graph, collects all exports, validates all expects are satisfied,
-resolves conflicts, and produces a deterministic seed manifest — the complete
-initial state the system must boot with. No manual configuration.
-
-```
-nlspec-seed resolve specs/my-entry-spec.md --output build/seed-manifest.json
-```
+graph operations, namespaces, `nlspec_import`, `nlspec_split`.
 
 **When you outgrow it:** You have multiple projects, multiple teams, compliance
 requirements that cross-cut everything. The spec graph IS your organization.
@@ -298,13 +298,13 @@ discover natural decomposition boundaries.
 Imports create typed relationships between specs:
 
 ```
-IMPORT StorageConfig FROM myproject/storage Section 8
+IMPORT StorageConfig FROM myproject/storage Config
   RELATIONSHIP: "uses configuration"
 
-IMPORT Entry FROM myproject/storage Section 4.1
+IMPORT Entry FROM myproject/storage DataModel.1
   RELATIONSHIP: "depends on data model"
 
-IMPORT validate_token FROM myproject/auth Section 5.1
+IMPORT validate_token FROM myproject/auth Functions section.1
   RELATIONSHIP: "calls auth function"
 ```
 
@@ -347,7 +347,7 @@ they test.
 
 ## CI/CD as Part of the Spec
 
-Specs can include PIPELINE definitions (Section 9) that tell agents when and how
+Specs can include PIPELINE definitions (Deployment section) that tell agents when and how
 to run tests:
 
 ```
@@ -363,10 +363,10 @@ PIPELINE: pr-check
 
 ```
 FILE_TO_SECTION_MAP:
-  src/parser/*.ts       → Section 5.1
-  src/store/*.ts        → Section 5.2
-  src/query/*.ts        → Section 5.3
-  src/mcp/tools/*.ts    → Section 6
+  src/parser/*.ts       → Functions section.1
+  src/store/*.ts        → Functions section.2
+  src/query/*.ts        → Functions.3
+  src/mcp/tools/*.ts    → API
 ```
 
 When a file changes, the agent maps it to a section, finds tagged scenarios,
@@ -403,7 +403,7 @@ FAILURE_MODE: Token Store Unreachable
   IMPACT: Auth Service cannot validate tokens
   MITIGATION: Fall back to JWT signature validation (no revocation check)
   RECOVERY: Automatic when health check passes
-  SCENARIO: SCENARIO 45 [SEC:7.3] [FULL]
+  SCENARIO: SCENARIO 45 [SEC:Errors.3] [FULL]
 ```
 
 These elements follow the same pattern as any other element type — they're
@@ -458,10 +458,10 @@ uses A2A to route work between agents. Each agent uses MCP to read and write spe
 The two protocols are complementary:
 
 ```
-A2A:   Orchestrator → "QA Agent, test Section 5.3" → QA Agent → "Bug found, SCENARIO 7 fails"
-MCP:   QA Agent → nlspec_get({section: "5.3"}) → read spec → nlspec_search({tags: ["SEC:5.3"]})
-MCP:   QA Agent → nlspec_patch_create({sections: ["5.3"], scenarios: [7], ...})
-A2A:   QA Agent → "Software Agent, PATCH-001 filed for Section 5.3" → Software Agent
+A2A:   Orchestrator → "QA Agent, test Functions.3" → QA Agent → "Bug found, SCENARIO 7 fails"
+MCP:   QA Agent → nlspec_get({section: "Functions.3"}) → read spec → nlspec_search({tags: ["SEC:Functions.3"]})
+MCP:   QA Agent → nlspec_patch_create({sections: ["Functions.3"], scenarios: [7], ...})
+A2A:   QA Agent → "Software Agent, PATCH-001 filed for Functions.3" → Software Agent
 MCP:   Software Agent → nlspec_slice({scenario: 7}) → read context → fix code
 ```
 
@@ -490,16 +490,19 @@ search across all namespaces. With it, results are scoped.
 ### Self-Bootstrap
 
 The nlspec system is defined by its own specs:
-1. `specs/bootstrap-spec.md` — parser, store, query engine, 8 CRUD tools
+1. `specs/bootstrap-spec.md` — parser, store, query engine, 8 CRUD tools (Phase 1)
 2. `specs/mcp-server-spec.md` — imports from bootstrap, adds context slicing,
-   patches, validation, graph, namespaces, `nlspec_import`, `nlspec_split`
-3. `specs/seed-resolver-spec.md` — dependency contract resolution, seed manifests
+   patches, validation, graph, namespaces, `nlspec_import`, `nlspec_split` (Phase 2a)
+3. `specs/seed-resolver-spec.md` — imports from bootstrap and mcp-server, walks
+   dependency graphs, resolves Contracts section contracts, produces seed manifests (Phase 2b)
+4. `specs/pattern-catalog.md` — prior art pattern reference (TYPE: CATALOG)
 
-Once both are implemented and the server is running:
+Once all are implemented and the server is running:
 
 ```
 nlspec_import({namespace: "nlspec", spec_id: "bootstrap", path: "specs/bootstrap-spec.md"})
 nlspec_import({namespace: "nlspec", spec_id: "mcp-server", path: "specs/mcp-server-spec.md"})
+nlspec_import({namespace: "nlspec", spec_id: "seed-resolver", path: "specs/seed-resolver-spec.md"})
 ```
 
 The system now manages its own specs. Every change to nlspec goes through the
@@ -513,10 +516,11 @@ same tools it provides.
 |-------|--------------|---------------|---------------------|
 | **0** | 1 spec, 1 agent | Just a template | NLSPEC-TEMPLATE.md, CLAUDE.md |
 | **1** | 1 large spec | Structured access | Bootstrap server (8 MCP tools) |
-| **2** | N specs | Decomposition, cross-spec queries | MCP server extensions, `nlspec_split`, namespaces, seed resolver |
-| **3** | N projects, N teams | Org-scale management, agent orchestration | Spec graph, validation, patches, A2A coordination |
+| **2a** | N specs | Decomposition, cross-spec queries | MCP server extensions, `nlspec_split`, namespaces |
+| **2b** | N specs with dependencies | Deterministic initialization | Seed resolver, dependency contracts |
+| **3** | N projects, N teams | Org-scale management, agent orchestration | Spec graph, validation, patches, patterns, assets |
 
-The 16-section template remains the format at every phase. Complex projects have
+The template remains the format at every phase. Complex projects have
 multiple spec files forming a dependency graph, each following the same template
 scoped to its concerns. The tooling grows with you — Phase 0 requires no tooling
 at all.

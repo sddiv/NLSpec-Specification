@@ -3,6 +3,7 @@
 > **Version:** 0.1.0
 > **Author:** {AUTHOR}
 > **Date:** {DATE}
+> **Type:** {SYSTEM | PATTERN | ASSET}
 > **Language Target:** {Rust | Go | TypeScript | Python | Language-Agnostic}
 > **Status:** {Draft | Review | Approved | Implementing | Complete}
 
@@ -19,33 +20,128 @@ code from. If you find ambiguity, the spec is incomplete — fix the spec, not t
 a method/function, and validate against every SCENARIO. If a SCENARIO fails, the
 implementation is wrong. Do not modify SCENARIOs to match your implementation.
 
+### Spec Types
+
+**SYSTEM** (default) — Produces a running system. All recommended sections apply. The agent
+implements this as a deployable service, library, or application.
+
+**PATTERN** — Defines a reusable architectural blueprint. The agent does not deploy
+this standalone — other SYSTEM specs reference it via `USES PATTERN:`. Most sections
+apply except Deployment (typically N/A unless the pattern includes infrastructure
+templates). The Scenarios section validates the pattern's constraints and interface
+contracts, not a running system.
+
+**ASSET** — Catalogs static resources and defines the style guide for how agents must
+use them. Assets can come from two sources:
+
+- **Workspace assets** (images, stylesheets, fonts, config templates, certificates)
+  that already exist in the workspace file structure. The agent does NOT generate
+  these — the ASSET spec tells the agent where they are and how to use them.
+
+- **External assets** (icon libraries, font packages, design token packs, UI component
+  libraries) that must be installed before use. The ASSET spec declares a DEPENDENCY
+  for installation, then catalogs the installed assets the same way as workspace assets.
+  After install, the agent reads the actual installed contents to build the catalog.
+
+For simple asset catalogs, only Abstract, Architecture, FileStructure, Boundaries,
+and Contracts sections are needed. For complex design systems with style guides, use
+all sections that apply. The Functions section becomes the style guide — the rules
+and tokens the agent follows when writing code that references these assets.
+
+**When to use an ASSET spec vs inline DEPENDENCY USAGE RULES:**
+- Simple case (one icon library, 3-5 rules) → DEPENDENCY with `interface: asset-pack`
+  and inline USAGE RULES. No separate ASSET spec needed.
+- Complex case (design system, brand guidelines, many rules/tokens, multiple asset
+  packs) → DEPENDENCY for install + separate ASSET spec for catalog and style guide.
+  The ASSET spec references the DEPENDENCY via `REQUIRES DEPENDENCY:`.
+
 ---
 
-## Table of Contents
+## Section Declaration
 
-1. [Abstract](#1-abstract)
-2. [Problem Statement](#2-problem-statement)
-3. [Architecture Overview](#3-architecture-overview)
-4. [Data Model](#4-data-model)
-5. [Core Functions](#5-core-functions)
-6. [API Surface](#6-api-surface)
-7. [Error Model](#7-error-model)
-8. [Configuration](#8-configuration)
-9. [Deployment Artifacts](#9-deployment-artifacts)
-10. [Scenarios](#10-scenarios)
-11. [Dependencies](#11-dependencies)
-12. [File Structure](#12-file-structure)
-13. [Maintenance Workflow](#13-maintenance-workflow)
-14. [Build and Run](#14-build-and-run)
-15. [Boundaries](#15-boundaries)
-16. [Dependency Contracts](#16-dependency-contracts)
+**Specs may declare their sections at the top.** When present, the SECTIONS block
+is the contract — it tells the agent what sections exist, what they're called, and
+what each contains. This enables strict mode: the parser validates completeness
+and the agent can check for structural gaps.
+
+**When no SECTIONS block is present**, the parser operates in loose mode: it discovers
+sections from `## ` headers in document order. The spec still works — all parsing,
+slicing, and implementation proceed normally. The agent just can't validate
+completeness against a declaration, and gap detection is less precise.
+
+**Either way, the parser never rejects a spec.** Missing sections are reported as
+gaps, not errors. A spec with just an Abstract and some FUNCTIONs is parseable and
+implementable — the agent will flag what's missing and proceed with what it has.
+
+**Recommended sections for TYPE: SYSTEM:**
+
+```
+SECTIONS:
+  Abstract        — what this spec defines
+  Problem         — current state, deficiency, target state, key insight
+  Architecture    — components, data flows, patterns, assets
+  DataModel       — RECORDs, ENUMs, ALIASes with invariants
+  Functions       — every function with behavior, pre/post conditions, errors
+  API             — external interface (endpoints, CLI, MCP tools)
+  Errors          — error taxonomy with codes, severity, handling
+  Config          — configuration knobs with types, defaults, validation
+  Deployment      — containers, manifests, pipelines, CI/CD
+  Scenarios       — behavioral validation (the holdout set)
+  Dependencies    — external systems, libraries, and asset packs with pinned versions
+  FileStructure   — expected directory layout
+  Maintenance     — bug workflow, patches, scenario tiers, versioning
+  BuildAndRun     — exact commands to build, test, run, verify, and artifact manifest
+  Boundaries      — explicit non-goals
+  Contracts       — exports, expects, conflict resolution
+```
+
+**Recommended sections for TYPE: PATTERN:**
+
+```
+SECTIONS:
+  Abstract        — what problem this pattern solves, when to use it
+  Problem         — the architectural problem and why existing approaches fail
+  Architecture    — the pattern's structure and components
+  Interface       — what the consuming spec interacts with
+  Constraints     — rules and invariants the pattern enforces
+  Scenarios       — constraint validation (not end-to-end system tests)
+  Boundaries      — what this pattern does not cover
+  Contracts       — architectural constraints exported to consumers
+```
+
+**Recommended sections for TYPE: ASSET:**
+
+```
+SECTIONS:
+  Abstract        — what assets this catalogs (workspace and/or external) and how agents use them
+  AssetCatalog    — file paths, formats, dimensions, variants (workspace + installed external)
+  LocaleCatalog   — locale files, fallback chains, string classifications
+  StyleGuide      — RULEs and TOKENs (design constraints, typography, spacing)
+  Boundaries      — what this asset does not cover
+  Contracts       — design constraints exported to consumers
+```
+
+**Rules:**
+- Section names are stable identifiers. Renaming a section requires updating all
+  `[SEC:]` tags that reference it.
+- Subsections use `{SectionName}.{number}`: `Functions.1`, `Architecture.2`.
+- Tags reference sections by name: `[SEC:Functions.1]`, `[SEC:Scenarios]`.
+- Custom sections are allowed. Add them to the SECTIONS block. The agent treats
+  them like any other section.
+- The SECTIONS block, when present, is the first thing the agent reads. It
+  determines what to look for and how to slice context.
+- Without a SECTIONS block, the agent discovers sections from `## ` headers.
+  Cross-references and slicing still work — the agent just can't detect
+  missing sections against a declaration.
 
 ---
 
-## 1. Abstract
+## Abstract
 
-**One paragraph.** What this system does, in plain English. A developer reading only this
-paragraph should understand the purpose, scope, and primary value proposition.
+**One paragraph.** What this spec defines, in plain English. A developer reading only
+this paragraph should understand the purpose, scope, and primary value proposition.
+
+**For SYSTEM specs:**
 
 ```
 {PROJECT_NAME} is a {one-line description}.
@@ -57,6 +153,28 @@ The primary consumer of this system is {who calls it / who uses it}.
 The implementation target is {language/platform}. The expected binary/artifact is {what}.
 ```
 
+**For PATTERN specs:** Describe the architectural problem this pattern solves.
+
+```
+{PATTERN_NAME} is a reusable architectural pattern for {what problem it solves}.
+
+Use this pattern when {conditions}. Do NOT use it when {anti-conditions}.
+
+This pattern is consumed by SYSTEM specs via "USES PATTERN: {name}".
+```
+
+**For ASSET specs:** Describe what resources exist and how agents should use them.
+
+```
+{ASSET_NAME} catalogs {what resources} located in {workspace paths}.
+
+This spec defines the style guide and usage constraints for these assets.
+Agents reference this spec to know which assets to use, at what sizes, in
+what contexts, and which design rules to follow.
+
+This asset is consumed by SYSTEM specs via "USES ASSET: {name}".
+```
+
 **If this spec covers multiple components** (e.g., a system with distinct subsystems
 that share a codebase), list them here:
 
@@ -66,15 +184,15 @@ COMPONENTS:
   {Component B}: {one-line purpose}
   {Component C}: {one-line purpose}
 
-Each component gets its own subsections in Sections 4, 5, 6, 7.
-For example: Section 4.1 covers Component A's RECORDs, Section 4.2 covers
+Each component gets its own subsections in DataModel, Functions, API, and Errors.
+For example: DataModel.1 covers Component A's RECORDs, DataModel.2 covers
 Component B's RECORDs. This keeps the spec navigable — the agent can read
 only the component it's working on.
 ```
 
 ---
 
-## 2. Problem Statement
+## Problem
 
 **What exists today and why it's insufficient.** Be specific about the pain point.
 Include measurable deficiencies (latency, cost, complexity, missing capability).
@@ -95,7 +213,7 @@ Include measurable deficiencies (latency, cost, complexity, missing capability).
 
 ---
 
-## 3. Architecture Overview
+## Architecture
 
 **ASCII diagram of the system.** Show every major component, how they connect, and
 what crosses system boundaries. This diagram is the reference for all subsequent sections.
@@ -117,7 +235,7 @@ what crosses system boundaries. This diagram is the reference for all subsequent
 +--------------------------------------------------+
 ```
 
-### 3.1 Component Inventory
+### Architecture.1 Component Inventory
 
 For each box in the diagram:
 
@@ -131,7 +249,7 @@ For each box in the diagram:
 - **Lifecycle:** {Created when, destroyed when}
 ```
 
-### 3.2 Data Flow
+### Architecture.2 Data Flow
 
 Describe the primary data flows through the system. Use numbered steps.
 
@@ -148,9 +266,68 @@ Latency budget: {total}ms
 - Step 3: {z}ms
 ```
 
+### Architecture.3 Patterns and Assets
+
+**Declare which architectural patterns and assets this system uses.** For prior art
+patterns, the agent uses its training knowledge — just name them. For novel patterns
+(full PATTERN specs), the agent reads the referenced spec. For assets, the agent
+reads the referenced asset spec or manifest.
+
+```
+USES PATTERN: {PatternName}
+  applied_to  : {which component or layer}
+  customization: {any project-specific adjustments, or "none"}
+
+USES PATTERN: {NovelPatternName} FROM {pattern-spec.md}
+  applied_to  : {which component or layer}
+  customization: {any project-specific adjustments, or "none"}
+
+USES ASSET: {AssetName} FROM {asset-spec.md}
+  applied_to  : {which component or layer}
+  customization: {any project-specific adjustments, or "none"}
+```
+
+**Prior art patterns** (agent already knows these — just declare usage):
+```
+USES PATTERN: Repository
+  applied_to  : data access layer
+  customization: "All repositories are async, return Result types"
+
+USES PATTERN: CircuitBreaker
+  applied_to  : external service calls
+  customization: "5 failure threshold, 30s recovery window"
+```
+
+**Novel patterns** (agent reads the full spec for implementation details):
+```
+USES PATTERN: ContextStack FROM context-stack-pattern.md
+  applied_to  : runtime state management
+  customization: "Base frame includes hardware manifest constraints"
+```
+
+**Assets** (agent reads the asset spec for file locations and usage rules):
+```
+USES ASSET: DesignSystem FROM design-system-spec.md
+  applied_to  : all UI components
+  customization: "Dark mode as default theme"
+```
+
+**Rules for the agent:**
+- For `USES PATTERN:` without a FROM, use your training knowledge of the named pattern.
+  Implement it according to the language idioms in Abstract section. Apply the customization.
+- For `USES PATTERN: X FROM spec.md`, read the referenced spec (TYPE: PATTERN).
+  Implement according to that spec.
+- For `USES ASSET: X FROM spec.md`, read the referenced spec (TYPE: ASSET).
+  Assets already exist in the workspace at the paths listed in the spec's FileStructure section.
+  Follow the style guide in the spec's Functions section. Honor all design constraints in
+  the spec's Contracts section EXPORTS.
+- Do NOT invent patterns or assets not declared here. If the implementation needs a
+  pattern not listed, STOP and report: "Component X would benefit from {pattern}.
+  Should I add it to Architecture.3?"
+
 ---
 
-## 4. Data Model
+## DataModel
 
 **Every data structure in the system.** Use RECORD for structs, ENUM for enumerations,
 ALIAS for type aliases. These are language-agnostic — implement as structs, classes,
@@ -173,7 +350,7 @@ ENUM Name:
 ALIAS Name = UnderlyingType    -- type alias
 ```
 
-### 4.1 Core Records
+### DataModel.1 Core Records
 
 ```
 RECORD {EntityName}:
@@ -191,7 +368,7 @@ RECORD {EntityName}:
 - {field} is immutable after creation
 - If {field_a} is set, {field_b} must also be set
 
-### 4.2 Enumerations
+### DataModel.2 Enumerations
 
 ```
 ENUM {EnumName}:
@@ -200,7 +377,7 @@ ENUM {EnumName}:
   VALUE_C    -- {when this value is used}
 ```
 
-### 4.3 Type Aliases
+### DataModel.3 Type Aliases
 
 ```
 ALIAS EntityId = String         -- UUID v4 format
@@ -210,12 +387,97 @@ ALIAS Duration = i64            -- Milliseconds
 
 ---
 
-## 5. Core Functions
+## Functions
 
 **Every function the system exposes or uses internally.** Each function is specified with:
 inputs, outputs, preconditions, postconditions, error conditions, and behavioral notes.
 
-### Conventions
+**For ASSET specs:** Functions section becomes the **style guide** — the design rules and
+tokens the agent must follow when writing code that references these assets. Use
+RULE blocks instead of FUNCTION blocks:
+
+```
+RULE {rule_name}:
+  applies_to  : {what this rule governs — e.g., "all buttons", "page layout", "typography"}
+  constraint  : {the rule itself — e.g., "minimum touch target is 44x44px"}
+  rationale   : {why this rule exists}
+  exceptions  : {when it's OK to deviate, or "none"}
+
+TOKEN {token_name}:
+  category    : {color | spacing | typography | breakpoint | shadow | border}
+  value       : {the value — e.g., "#1a73e8", "16px", "Inter 400"}
+  usage       : {when to use this token}
+  css_var     : {CSS custom property name, if applicable — e.g., "--color-primary"}
+```
+
+Example style guide:
+```
+RULE minimum-touch-target:
+  applies_to  : all interactive elements (buttons, links, form controls)
+  constraint  : minimum 44x44px touch target area
+  rationale   : WCAG 2.5.5 accessibility requirement
+  exceptions  : inline text links within paragraphs
+
+RULE color-contrast:
+  applies_to  : all text on backgrounds
+  constraint  : minimum 4.5:1 contrast ratio (AA), 7:1 for large text (AAA)
+  rationale   : WCAG 2.1 Level AA compliance
+  exceptions  : decorative text, disabled states
+
+TOKEN color-primary:
+  category    : color
+  value       : #1a73e8
+  usage       : primary actions, links, active states
+  css_var     : --color-primary
+
+TOKEN spacing-unit:
+  category    : spacing
+  value       : 8px
+  usage       : base spacing unit. All spacing is a multiple of this value.
+  css_var     : --spacing-unit
+
+TOKEN font-body:
+  category    : typography
+  value       : Inter, 16px/1.5, 400 weight
+  usage       : all body text
+  css_var     : --font-body
+
+TOKEN breakpoint-mobile:
+  category    : breakpoint
+  value       : 768px
+  usage       : below this width, switch to mobile layout
+  css_var     : --breakpoint-mobile
+```
+
+Localization rules (if the ASSET spec includes locale strings):
+```
+RULE no-hardcoded-strings:
+  applies_to  : all display text in UI components
+  constraint  : every user-visible string must come from a locale file via a
+                string key. Never hardcode text in templates or components.
+  rationale   : enables localization without code changes
+  exceptions  : none
+
+RULE fallback-chain:
+  applies_to  : string resolution at runtime
+  constraint  : resolve strings as: exact locale → language locale → source locale.
+                Example: fr-CA → fr → en.
+  rationale   : partial translations should still render, not break
+  exceptions  : none
+
+RULE curated-string-integrity:
+  applies_to  : strings classified as human_curated in the LOCALE CATALOG
+  constraint  : never auto-translate. If missing in target locale, display the
+                fallback locale version. Flag as a translation gap in build output.
+  rationale   : brand voice, legal text, and cultural nuance require human review
+  exceptions  : none
+```
+
+The agent reads these RULEs and TOKENs before generating any UI code. When a
+SYSTEM spec declares `USES ASSET: DesignSystem`, the agent must honor every RULE
+and use every TOKEN from that ASSET spec's Functions section.
+
+### Conventions (for SYSTEM specs)
 
 ```
 FUNCTION function_name(param: Type, param: Type) -> ReturnType
@@ -247,7 +509,7 @@ FUNCTION function_name(param: Type, param: Type) -> ReturnType
   - {Idempotency guarantees}
 ```
 
-### 5.1 {Function Group Name}
+### Functions.1 {Function Group Name}
 
 ```
 FUNCTION {name}({params}) -> {return}
@@ -256,7 +518,7 @@ FUNCTION {name}({params}) -> {return}
 
 ---
 
-## 6. API Surface
+## API
 
 **The external interface.** HTTP endpoints, gRPC services, CLI commands, or library API —
 whatever the caller sees. Each endpoint is fully specified.
@@ -296,7 +558,7 @@ ENDPOINT {METHOD} {path}
       {"results": [...], "total": 42, "latency_ms": 3}
 ```
 
-### 6.1 {API Group}
+### API.1 {API Group}
 
 ```
 ENDPOINT ...
@@ -304,7 +566,7 @@ ENDPOINT ...
 
 ---
 
-## 7. Error Model
+## Errors
 
 **Complete error taxonomy.** Every error the system can produce, organized hierarchically.
 The coding agent must implement all of these.
@@ -332,7 +594,7 @@ The coding agent must implement all of these.
 
 ---
 
-## 8. Configuration
+## Config
 
 **Every knob the system exposes.** Environment variables, config files, CLI flags.
 Each config value has a type, default, and description.
@@ -353,7 +615,7 @@ CONFIG {config_group}:
     description: {what it controls}
 ```
 
-### 8.1 {Config Group}
+### Config.1 {Config Group}
 
 ```
 CONFIG server:
@@ -374,13 +636,14 @@ CONFIG server:
 
 ---
 
-## 9. Deployment Artifacts
+## Deployment
 
 **Infrastructure-as-code, manifests, and deployment definitions.** Not every spec needs
-this section — skip it for pure libraries. Include it for anything that gets deployed
-(services, infrastructure, controllers).
+this section — skip it for pure libraries and PATTERN specs. Include it for anything
+that gets deployed (services, infrastructure, controllers). ASSET specs include this
+only if assets need to be deployed to a CDN or artifact registry.
 
-### 9.1 Container / Image
+### Deployment.1 Container / Image
 
 ```
 IMAGE {name}:
@@ -395,7 +658,7 @@ IMAGE {name}:
     gpu: {type and count, if applicable}
 ```
 
-### 9.2 Kubernetes Manifests
+### Deployment.2 Kubernetes Manifests
 
 ```
 MANIFEST {name}:
@@ -411,7 +674,7 @@ MANIFEST {name}:
   Full YAML: (inline or reference to file in deploy/ directory)
 ```
 
-### 9.3 Infrastructure Dependencies
+### Deployment.3 Infrastructure Dependencies
 
 ```
 INFRA {name}:
@@ -422,7 +685,7 @@ INFRA {name}:
   verification: {how to confirm it's ready}
 ```
 
-### 9.4 Deployment Order
+### Deployment.4 Deployment Order
 
 ```
 DEPLOY ORDER:
@@ -435,7 +698,7 @@ DEPLOY ORDER:
   - After step 2: {check command and expected output}
 ```
 
-### 9.5 CI/CD Pipelines
+### Deployment.5 CI/CD Pipelines
 
 **Define when and how scenarios run automatically.** The Quality Spec (or Scenarios
 section) defines WHAT to test. This section defines WHEN those tests run and what
@@ -473,7 +736,7 @@ PIPELINE release:
   failure: {block release}
 ```
 
-### 9.6 File-to-Section Mapping
+### Deployment.6 File-to-Section Mapping
 
 **Maps source files to spec sections for automatic AFFECTED scenario determination.**
 When a file changes, the CI pipeline uses this map to identify which scenarios to run.
@@ -484,17 +747,22 @@ FILE_TO_SECTION_MAP:
   {src/path/to/api/*}      → [{SEC:x.x}]
   {src/path/to/errors.*}   → [{SEC:x}]
   {src/path/to/config.*}   → [{SEC:x}]
-  {deploy/*}               → [{SEC:9}]
+  {deploy/*}               → [{SEC:Deployment}]
 ```
 
 ---
 
-## 10. Scenarios
+## Scenarios
 
 **End-to-end validation scenarios.** These are NOT unit tests — they are behavioral
 specifications. Each scenario describes a complete user journey with expected outcomes.
 The coding agent must make ALL scenarios pass. Scenarios are the "holdout set" —
 they validate the system works correctly end-to-end.
+
+**For PATTERN specs:** Scenarios validate the pattern's constraints and interface
+contracts, not a running system. For example, a Repository pattern scenario might
+verify that all data access goes through the repository interface, not directly to
+the database.
 
 ### Conventions
 
@@ -518,7 +786,7 @@ SCENARIO {number}: {name}
   - {Why this scenario matters}
 ```
 
-### 9.1 Happy Path Scenarios
+### Scenarios.1 Happy Path Scenarios
 
 ```
 SCENARIO 1: {Basic successful operation}
@@ -530,7 +798,7 @@ SCENARIO 1: {Basic successful operation}
   - ...
 ```
 
-### 9.2 Error Scenarios
+### Scenarios.2 Error Scenarios
 
 ```
 SCENARIO 10: {What happens when X fails}
@@ -544,7 +812,7 @@ SCENARIO 10: {What happens when X fails}
   - ...
 ```
 
-### 9.3 Performance Scenarios
+### Scenarios.3 Performance Scenarios
 
 ```
 SCENARIO 20: {Latency under load}
@@ -558,7 +826,7 @@ SCENARIO 20: {Latency under load}
   - No errors
 ```
 
-### 9.4 Edge Case Scenarios
+### Scenarios.4 Edge Case Scenarios
 
 ```
 SCENARIO 30: {Boundary condition}
@@ -572,36 +840,210 @@ SCENARIO 30: {Boundary condition}
 
 ---
 
-## 11. Dependencies
+## Dependencies
 
-**External systems and libraries this project requires.**
-
-```
-DEPENDENCY {name}:
-  purpose: {why we need it}
-  version: {minimum version}
-  required: {true | false — can the system function without it?}
-  interface: {how we interact with it — API, library, CLI, socket}
-  fallback: {what happens if it's unavailable}
-```
-
-### 10.1 Runtime Dependencies
+**External systems, libraries, and asset packs this project requires.** Every dependency
+the agent needs to install, fetch, or pull before building. The agent honors these
+declarations during IMPLEMENT — it does not substitute alternatives, upgrade versions,
+or skip platform constraints without human approval.
 
 ```
 DEPENDENCY {name}:
-  ...
+  category    : {runtime | build | external-asset}
+  purpose     : {why we need it}
+  version     : {exact version, range, or "latest" — see pinning rules below}
+  source      : {where to get it — npm, PyPI, crates.io, Docker Hub, CDN, etc.}
+  install     : {exact command to install}
+  required    : {true | false — can the system function without it?}
+  interface   : {library | CLI | API | base-image | asset-pack | socket}
+  platform    : {architecture/OS constraint — e.g., "linux/arm64", "any"}
+  verify      : {command or check to verify the install succeeded and matches the spec}
+  fallback    : {what happens if it's unavailable}
 ```
 
-### 10.2 Build Dependencies
+### Version Pinning Rules
 
 ```
-DEPENDENCY {name}:
-  ...
+RULE: When `version` specifies an exact version (e.g., "3.1.0", "v2.4"),
+  the agent installs EXACTLY that version. No upgrades, no "compatible" substitutes.
+
+RULE: When `version` specifies a range (e.g., "^3.1.0", ">=2.4 <3.0"),
+  the agent resolves within that range and records the resolved version in a lockfile.
+
+RULE: When `version` says "latest", the agent installs the latest available
+  at implementation time and records the resolved version in the lockfile or
+  build output. The spec author accepts that this may change between builds.
+
+RULE: When `platform` is specified, the agent MUST verify the dependency supports
+  that platform. If building a Docker image, the base image must support the declared
+  architecture. Do NOT silently fall back to a different platform.
+
+RULE: The agent NEVER substitutes a different library for the one declared.
+  "Use React instead of Preact" is a spec change, not an implementation choice.
+```
+
+### Verify After Install — Critical Anti-Hallucination Rule
+
+**The agent's training knowledge about a dependency's API, config format, or asset
+names may be wrong for the pinned version.** This is the most common source of
+subtle bugs in agent-generated code: the agent installs version X but writes code
+using version Y's API because that's what its training data contains.
+
+```
+RULE: After installing any dependency, the agent MUST verify its generated code
+  against the ACTUAL installed artifact — not against training knowledge.
+
+RULE: The `verify` field in the DEPENDENCY declaration tells the agent HOW to check.
+  If no `verify` field exists, the agent uses these defaults by interface type:
+
+  library:
+    1. After install, read the installed package's type definitions, API surface,
+       or module exports (e.g., node_modules/{name}/index.d.ts, or the package's
+       __init__.py, or cargo doc output)
+    2. Compare every import and function call in the generated code against the
+       actual exports of the installed version
+    3. If a function/class/type used in code doesn't exist in the installed version,
+       fix the code BEFORE running tests — don't wait for test failures
+
+  CLI:
+    1. Run `{name} --version` or `{name} version` to confirm the version matches
+    2. Run `{name} --help` or read the man page to verify subcommands and flags
+       used in the generated scripts/config actually exist
+    3. If the spec generates config files for the CLI tool, verify the config
+       format matches the installed version's expected schema
+
+  base-image:
+    1. Pull the image and inspect: `docker inspect {image}:{tag}`
+    2. Verify the declared platform matches: check Architecture field
+    3. If the Dockerfile uses features from the base image (installed packages,
+       entrypoint, exposed ports), verify they exist in the actual image
+
+  asset-pack:
+    1. After install, list the actual available assets
+       (e.g., ls node_modules/lucide-react/dist/esm/icons/)
+    2. Compare every asset reference in the generated code against the actual
+       available assets
+    3. If an icon/font/component name used in code doesn't exist in the installed
+       pack, fix the reference BEFORE running tests
+
+  API:
+    1. If the dependency provides a health or version endpoint, check it
+    2. If the dependency provides an OpenAPI/GraphQL schema, fetch it and
+       verify the generated client code matches the actual schema
+
+RULE: If the `verify` check fails, classify as IMPL_BUG (not SPEC_GAP).
+  The spec correctly declared the dependency and version. The agent's code was
+  wrong for that version. Fix the code to match the installed reality.
+
+RULE: If the installed version's API is fundamentally different from what the
+  spec's FUNCTIONs expect (e.g., the spec says "call airflow.trigger_dag()"
+  but the installed version has no such function), classify as SPEC_GAP.
+  The spec needs updating to match the dependency's actual API. File a patch.
+```
+
+### Dependencies.1 Runtime Dependencies
+
+Dependencies needed at runtime. The built artifact requires these to run.
+
+Example:
+```
+DEPENDENCY airflow:
+  category    : runtime
+  purpose     : Workflow orchestration engine
+  version     : "3.1.0"
+  source      : PyPI
+  install     : pip install apache-airflow==3.1.0
+  required    : true
+  interface   : library
+  platform    : any
+  verify      : "python -c 'import airflow; print(airflow.__version__)' outputs '3.1.0'
+                 AND python -c 'from airflow.sdk import DAG' succeeds (v3 uses sdk module)"
+  fallback    : none — core dependency
+
+DEPENDENCY postgres:
+  category    : runtime
+  purpose     : Primary database
+  version     : "16"
+  source      : Docker Hub
+  install     : docker pull postgres:16
+  required    : true
+  interface   : base-image
+  platform    : linux/arm64
+  verify      : "docker inspect postgres:16 shows Architecture=arm64"
+  fallback    : none — required for persistence
+```
+
+### Dependencies.2 Build Dependencies
+
+Dependencies needed to build but not at runtime.
+
+Example:
+```
+DEPENDENCY rust:
+  category    : build
+  purpose     : Compiler toolchain
+  version     : "1.75"
+  source      : rustup
+  install     : rustup install 1.75.0
+  required    : true
+  interface   : CLI
+  platform    : linux/arm64
+  verify      : "rustc --version outputs 'rustc 1.75.x'
+                 AND rustc --print target-list | grep aarch64-unknown-linux"
+  fallback    : none
+```
+
+### Dependencies.3 External Asset Packs
+
+Assets that are NOT in the workspace and must be fetched before use. Icon libraries,
+font packages, design token packs, UI component libraries. The agent installs them
+during IMPLEMENT and uses them according to the rules declared here or in a
+referenced ASSET spec.
+
+Example:
+```
+DEPENDENCY lucide-react:
+  category    : external-asset
+  purpose     : Icon library — all UI icons must come from this pack
+  version     : "0.263.1"
+  source      : npm
+  install     : npm install lucide-react@0.263.1
+  required    : true
+  interface   : asset-pack
+  platform    : any
+  verify      : "After install, run: ls node_modules/lucide-react/dist/esm/icons/
+                 Then verify every icon import in the codebase exists in that directory.
+                 Common renames across versions: Edit2→Pencil, Trash2→Trash"
+  fallback    : none — do NOT use inline SVGs for icons that exist in this library
+
+  USAGE RULES:
+  - Import by name: `import { Camera, Trash, Search } from 'lucide-react'`
+  - Do NOT use icons from any other library (no FontAwesome, no Heroicons)
+  - Do NOT inline SVGs for icons that exist in lucide-react
+  - If an icon doesn't exist in lucide-react, ask the human — do NOT substitute
+  - See brand-assets-spec.md for icon sizing and color rules (if applicable)
+
+DEPENDENCY inter-font:
+  category    : external-asset
+  purpose     : Primary UI typeface
+  version     : "4.0"
+  source      : Google Fonts
+  install     : "Add to HTML: <link href='https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700' rel='stylesheet'>"
+  required    : true
+  interface   : asset-pack
+  platform    : any
+  verify      : "Font loads in browser — check Network tab for fonts.googleapis.com 200 response"
+  fallback    : "font-family: system-ui, -apple-system, sans-serif"
+
+  USAGE RULES:
+  - Use Inter for all body text and UI elements
+  - Weights: 400 (body), 500 (labels), 600 (headings), 700 (emphasis)
+  - Do NOT use other fonts unless the ASSET spec explicitly declares them
 ```
 
 ---
 
-## 12. File Structure
+## FileStructure
 
 **The expected directory layout.** The coding agent must produce this structure.
 
@@ -640,9 +1082,235 @@ DEPENDENCY {name}:
     └── default.toml           -- default configuration
 ```
 
+**For ASSET specs:** FileStructure section becomes the asset catalog — mapping every
+asset with its metadata. Assets come from two sources:
+
+- **Workspace assets** — files that already exist on disk. The spec catalogs them.
+- **External assets** — assets from an installed DEPENDENCY (icon pack, font package,
+  component library). The ASSET spec declares which DEPENDENCY provides the assets,
+  and the agent reads the installed contents to verify the catalog.
+
+```
+ASSET CATALOG:
+
+  --- Workspace assets (already on disk) ---
+
+  ASSET {name}:
+    source      : workspace
+    path        : {workspace-relative path, e.g., "assets/logo-dark.svg"}
+    format      : {file format: SVG, PNG, CSS, WOFF2, JSON, etc.}
+    description : {what this asset is and when to use it}
+    dimensions  : {width x height if image — e.g., "200x50"}
+    variants    : {list of size/context variants, if applicable}
+
+  --- External assets (installed from a DEPENDENCY) ---
+
+  ASSET {name}:
+    source      : dependency:{dependency_name}
+    path        : {path within installed package, e.g., "lucide-react/dist/esm/icons/"}
+    format      : {format — e.g., "React component", "SVG", "WOFF2"}
+    description : {what this asset pack provides}
+    includes    : {which assets from the pack to use — "all" or a curated list}
+    excludes    : {which assets to NOT use, if applicable}
+```
+
+**REQUIRES DEPENDENCY declaration:**
+
+When an ASSET spec depends on an external package, declare it at the top of the
+FileStructure section. This tells the agent to install the dependency before
+reading the catalog.
+
+```
+REQUIRES DEPENDENCY: {name} FROM {system-spec.md}
+```
+
+This references a DEPENDENCY element declared in the consuming SYSTEM spec's
+Dependencies section. The ASSET spec doesn't own the install — the SYSTEM spec does.
+The ASSET spec just says "I need this installed to catalog its contents."
+
+Example — mixed workspace and external assets:
+```
+REQUIRES DEPENDENCY: lucide-react FROM app-spec.md
+REQUIRES DEPENDENCY: inter-font FROM app-spec.md
+
+ASSET CATALOG:
+
+  --- Workspace assets ---
+
+  ASSET logo-dark:
+    source      : workspace
+    path        : assets/images/logo-dark.svg
+    format      : SVG
+    description : Primary logo for dark backgrounds. Use in nav bar and login page.
+    dimensions  : "200x50 (native), scales to container width"
+    variants    :
+      - favicon: assets/images/favicon-32.png (32x32, PNG)
+      - og-image: assets/images/og-logo.png (1200x630, PNG)
+
+  ASSET base-styles:
+    source      : workspace
+    path        : styles/base.css
+    format      : CSS
+    description : Global reset, typography, spacing scale, color variables.
+                  Import this in every page. Do NOT override CSS custom properties
+                  defined here — extend them in component-level styles.
+
+  ASSET design-tokens:
+    source      : workspace
+    path        : styles/tokens.json
+    format      : JSON
+    description : Machine-readable design tokens (colors, spacing, typography,
+                  breakpoints). Generated from the style guide. The agent reads
+                  this file when producing any UI code.
+
+  --- External assets (from installed dependencies) ---
+
+  ASSET icons:
+    source      : dependency:lucide-react
+    path        : node_modules/lucide-react/dist/esm/icons/
+    format      : React component (ESM)
+    description : UI icon library. All icons in the application come from this pack.
+    includes    : all — agent may use any icon in the pack
+    excludes    : none
+
+  ASSET primary-font:
+    source      : dependency:inter-font
+    path        : (loaded via Google Fonts CDN — no local path)
+    format      : WOFF2 (remote)
+    description : Primary UI typeface. Loaded via <link> tag in HTML head.
+    includes    : "weights 400, 500, 600, 700"
+    excludes    : "weights 100-300, 800-900 — not in the brand guidelines"
+```
+
+**Rules for external asset catalogs:**
+
+```
+RULE: The agent MUST install the required DEPENDENCY before reading the catalog.
+  Do NOT catalog assets that haven't been installed yet.
+
+RULE: After installation, the agent verifies the catalog against the actual
+  installed contents. If the catalog lists an asset that doesn't exist in the
+  installed package, classify as SPEC_GAP (catalog is wrong) or IMPL_BUG
+  (wrong version installed).
+
+RULE: If `includes` is "all", the agent may use any asset in the installed pack.
+  If `includes` is a curated list, the agent uses ONLY those assets and treats
+  any other asset in the pack as if it doesn't exist.
+
+RULE: The `excludes` field overrides `includes: all`. If an asset is excluded,
+  the agent MUST NOT use it even though it's available.
+
+RULE: For external assets, the agent reads the ACTUAL installed contents to
+  discover asset names — not training knowledge. Icon names, component names,
+  and font weights can change between versions.
+```
+
+### Localization Strings
+
+Locale files are assets. They live in the workspace and are cataloged like any
+other asset. The key distinction is that some strings are agent-translatable
+(the agent can generate them for new locales) while others are human-curated
+(the agent must use them verbatim from the locale file).
+
+```
+LOCALE CATALOG:
+  source_locale : {the authoritative locale — e.g., "en"}
+  fallback_chain: {resolution order — e.g., "fr-CA → fr → en"}
+  format        : {file format — e.g., "JSON (flat key-value)", "JSON (nested)", "YAML"}
+  interpolation : {variable syntax — e.g., "{variable}", "{{variable}}", "%{variable}"}
+
+  LOCALE {locale_code}:
+    path        : {workspace path, e.g., "locales/en.json"}
+    status      : {complete | partial | stub}
+    coverage    : {percentage of source_locale keys present}
+
+  LOCALE {locale_code}:
+    path        : {workspace path}
+    ...
+```
+
+```
+STRING CLASSIFICATION:
+
+  STRING_CLASS agent_translatable:
+    description : Straightforward UI labels, button text, form fields, error messages.
+                  The agent can generate these for new locales from the source strings.
+    keys        : {list of key patterns, e.g., "nav.*", "button.*", "form.label.*"}
+    review      : optional
+
+  STRING_CLASS human_curated:
+    description : Brand copy, legal text, culturally sensitive content, idioms, humor,
+                  marketing slogans. The agent must use these VERBATIM from the locale
+                  file. If a key is missing in a locale, fall back — do NOT auto-translate.
+    keys        : {list of key patterns, e.g., "legal.*", "marketing.*", "onboarding.welcome"}
+    review      : required
+
+  STRING_CLASS interpolated:
+    description : Strings with variables. The agent must preserve all placeholders and
+                  handle pluralization per locale rules.
+    keys        : {list of key patterns, e.g., "messages.item_count", "messages.time_ago"}
+    pluralization: {rule reference — e.g., "CLDR plural rules per locale"}
+    review      : required for human_curated, optional for agent_translatable
+```
+
+Example:
+```
+LOCALE CATALOG:
+  source_locale : en
+  fallback_chain: "regional → language → en" (e.g., fr-CA → fr → en)
+  format        : JSON (flat key-value)
+  interpolation : {variable}
+
+  LOCALE en:
+    path        : locales/en.json
+    status      : complete
+    coverage    : 100%
+
+  LOCALE es:
+    path        : locales/es.json
+    status      : complete
+    coverage    : 100%
+
+  LOCALE ja:
+    path        : locales/ja.json
+    status      : partial
+    coverage    : 85%
+
+STRING CLASSIFICATION:
+
+  STRING_CLASS agent_translatable:
+    description : Standard UI labels and form text
+    keys        : "nav.*", "button.*", "form.label.*", "form.placeholder.*",
+                  "error.validation.*", "table.header.*"
+    review      : optional
+
+  STRING_CLASS human_curated:
+    description : Brand voice, legal, and culturally nuanced content
+    keys        : "legal.*", "marketing.*", "onboarding.welcome",
+                  "onboarding.value_prop", "error.friendly.*"
+    review      : required
+
+  STRING_CLASS interpolated:
+    description : Strings with dynamic values
+    keys        : "messages.item_count", "messages.time_ago", "messages.greeting"
+    pluralization: CLDR plural rules (one/few/many/other per locale)
+    review      : required for human_curated keys, optional otherwise
+```
+
+**Rules for the agent:**
+- Always load strings from locale files. Never hardcode display text.
+- For `agent_translatable` strings missing in a target locale, the agent MAY
+  generate a translation from the source locale string.
+- For `human_curated` strings missing in a target locale, the agent MUST fall
+  back through the fallback chain. Never auto-translate these.
+- For `interpolated` strings, preserve all `{variable}` placeholders. Handle
+  pluralization according to the locale's CLDR plural rules.
+- When adding new UI strings during implementation, add the key to the source
+  locale file, classify it, and note missing translations for other locales.
+
 ---
 
-## 13. Maintenance Workflow
+## Maintenance
 
 **How to handle bugs, changes, and iteration after initial implementation.**
 
@@ -650,7 +1318,7 @@ The spec is the source of truth, not the code. Code is a derived artifact of the
 When something is wrong, determine which category the issue falls into and follow
 the corresponding workflow.
 
-### 13.1 Bug Categories
+### Maintenance.1 Bug Categories
 
 ```
 CATEGORY A — Spec Deficiency:
@@ -687,7 +1355,7 @@ CATEGORY C — Missing Capability:
   5. New SCENARIOs must pass, all existing SCENARIOs must still pass
 ```
 
-### 13.2 Patch Spec Format
+### Maintenance.2 Patch Spec Format
 
 A patch spec is a small, focused document used for Category B fixes. It is temporary
 and gets absorbed into the main spec at the next version bump.
@@ -696,7 +1364,7 @@ and gets absorbed into the main spec at the next version bump.
 # PATCH: {short description}
 
 > **Patches:** {SPEC_NAME} v{version}
-> **Section:** {section number and name}
+> **Section:** {section name and name}
 > **Failing Scenario:** {scenario number}
 > **Date:** {date}
 
@@ -723,12 +1391,12 @@ SCENARIO P{number}: {patch scenario name}
   - {correct behavior after fix}
 ```
 
-### 13.3 What the Agent Receives — Modular Context, Not Full Spec
+### Maintenance.3 What the Agent Receives — Modular Context, Not Full Spec
 
 **Never feed the full spec for a bug fix.** The full spec is for initial implementation
 and major version bumps ONLY. For patches and fixes, feed the minimum context needed.
 
-The spec is designed to be sliceable by section number. Each FUNCTION references which
+The spec is designed to be sliceable by section name. Each FUNCTION references which
 RECORDs it uses. Each SCENARIO references which FUNCTIONs it tests. This dependency
 chain determines the context slice.
 
@@ -738,7 +1406,10 @@ CONTEXT SLICE for a bug fix:
   2. The failing SCENARIO(s) (what must now pass)
   3. The RECORDs referenced by the affected FUNCTION (data structures it touches)
   4. The ERROR MODEL entries relevant to the function
-  5. NOTHING ELSE
+  5. Any PATTERN constraints that apply to the affected component (from Architecture.3)
+  6. Any ASSET constraints that apply (RULEs and TOKENs from referenced ASSET spec Functions section)
+  7. Any seed rules from the seed manifest that constrain this area
+  8. NOTHING ELSE
 
 Typical slice size: 200-500 lines (not 3,000-7,000)
 ```
@@ -769,7 +1440,7 @@ STAGE: Consolidation (absorb patches)
   When: periodically, e.g., weekly or at minor version bumps
 ```
 
-### 13.4 Scenario Tiers — Not All Scenarios Run Every Time
+### Maintenance.4 Scenario Tiers — Not All Scenarios Run Every Time
 
 SCENARIOs are tagged with tiers that determine when they run:
 
@@ -785,7 +1456,7 @@ SCENARIO TIERS:
   AFFECTED (runs on relevant changes):
     - Scenarios that test the specific FUNCTION or RECORD being changed
     - Determined by dependency tracing from the changed section
-    - Tagged with the section they validate: [SEC:5.3] [SEC:4.1]
+    - Tagged with the section they validate: [SEC:Functions.3] [SEC:DataModel.1]
 
   FULL (runs nightly / at version bumps):
     - ALL scenarios, including performance and edge cases
@@ -804,13 +1475,13 @@ Cost model:
   This is how 3 engineers produce hundreds of patches per day without cost overruns.
 ```
 
-### 13.5 Scenario Dependency Tags
+### Maintenance.5 Scenario Dependency Tags
 
 Each SCENARIO declares which spec sections it validates. This enables automatic
 determination of which scenarios to run when a section changes.
 
 ```
-SCENARIO 7: Query returns results within latency budget  [SEC:5.3] [SEC:4.1] [SMOKE]
+SCENARIO 7: Query returns results within latency budget  [SEC:Functions.3] [SEC:DataModel.1] [SMOKE]
   GIVEN:
   - Catalog loaded with 1000 tables
   WHEN:
@@ -820,12 +1491,12 @@ SCENARIO 7: Query returns results within latency budget  [SEC:5.3] [SEC:4.1] [SM
   - Latency < 10ms
 ```
 
-When Section 5.3 is patched, the agent runs:
+When Functions section.3 is patched, the agent runs:
 - All [SMOKE] scenarios (always)
-- All [SEC:5.3] scenarios (affected by the change)
-- NOT scenarios tagged [SEC:6.2] or [SEC:8.1] (unrelated)
+- All [SEC:Functions.3] scenarios (affected by the change)
+- NOT scenarios tagged [SEC:API.2] or [SEC:Config.1] (unrelated)
 
-### 13.6 Spec Versioning Rules
+### Maintenance.6 Spec Versioning Rules
 
 ```
 Version format: MAJOR.MINOR.PATCH
@@ -849,7 +1520,7 @@ Version format: MAJOR.MINOR.PATCH
     - The agent should re-implement from scratch
 ```
 
-### 13.7 Scenario as Regression Guard
+### Maintenance.7 Scenario as Regression Guard
 
 Every bug fix (any category) MUST add or identify a SCENARIO that prevents regression.
 SCENARIOs are append-only — you never remove a passing SCENARIO. The SCENARIO count
@@ -863,7 +1534,7 @@ it if it reappeared. If no such SCENARIO exists, the fix is incomplete.
 
 ---
 
-## 14. Build and Run
+## BuildAndRun
 
 **How to build, test, and run the system.** Exact commands.
 
@@ -887,21 +1558,75 @@ $ {run command}
 ### Verify
 $ {curl or CLI command to verify the system is running}
 Expected output: {what you should see}
+
+### Artifacts
+
+**What a successful build produces.** Machine-checkable output contract. The agent
+verifies these after IMPLEMENT and VALIDATE. Downstream specs can depend on these
+artifacts existing and matching their declared properties.
+
+```
+ARTIFACT {name}:
+  type        : BINARY | CONTAINER | LIBRARY | CONFIG | STATIC | BUNDLE
+  path        : {where the artifact lives after build — relative to project root}
+  produced_by : {which build command creates this}
+  checkable   : {how to verify it exists and is correct}
+  properties:
+    {key}     : {value — e.g., exposes_port: 8080, binary_name: "kv-server"}
+```
+
+Example:
+```
+ARTIFACT server-binary:
+  type        : BINARY
+  path        : target/release/kv-server
+  produced_by : cargo build --release
+  checkable   : file exists AND file is executable AND ./kv-server --version prints version
+  properties:
+    binary_name : kv-server
+    min_size    : 1MB
+
+ARTIFACT docker-image:
+  type        : CONTAINER
+  path        : docker.io/{org}/kv-server:{version}
+  produced_by : docker build -t kv-server .
+  checkable   : docker inspect kv-server:{version} succeeds
+  properties:
+    exposes_port : 8080
+    base_image   : rust:1.75-slim
+
+ARTIFACT api-schema:
+  type        : STATIC
+  path        : docs/openapi.yaml
+  produced_by : cargo run -- --export-schema > docs/openapi.yaml
+  checkable   : file exists AND valid OpenAPI 3.x
+  properties:
+    format     : openapi-3.1
+```
+
+**Rules:**
+- Every SYSTEM spec should declare at least one ARTIFACT (the primary deliverable).
+- PATTERN and ASSET specs typically produce LIBRARY artifacts.
+- Artifacts are verified after IMPLEMENT (do they exist?) and after VALIDATE
+  (do they still exist and pass checks after all scenarios run?).
+- Downstream specs can reference artifacts in their EXPECTS declarations:
+  `EXPECTS ServerBinary FROM kv-store-spec.md` means the dependency must produce
+  that artifact before this spec can be implemented.
 ```
 
 ---
 
-## 15. Boundaries
+## Boundaries
 
-**What this system explicitly does NOT do.** Prevents scope creep during implementation.
+**What this spec explicitly does NOT cover.** Prevents scope creep during implementation.
 
 ```
-### This System Does:
+### This Spec Does:
 - {capability}
 - {capability}
 
-### This System Does NOT:
-- {non-goal} — {why not, and what system handles this instead}
+### This Spec Does NOT:
+- {non-goal} — {why not, and what handles this instead}
 - {non-goal} — {why not}
 
 ### Future Extensions (not in this spec):
@@ -910,7 +1635,7 @@ Expected output: {what you should see}
 
 ---
 
-## 16. Dependency Contracts
+## Contracts
 
 **What this spec exports to consumers and expects from dependencies.** When spec A
 declares `IMPORT spec B`, B's exports are automatically seeded as rules in A's runtime.
@@ -920,11 +1645,7 @@ initialization state.
 If this spec has no imports and is not imported by others, state:
 `EXPORTS: none — this spec is standalone.`
 
-### 16.1 Exports
-
-Exports are constraints, rules, or data that this spec provides to any spec that
-imports it. They are instantiated automatically — the consuming spec does not need
-to reference them explicitly.
+### Contracts.1 Exports
 
 ```
 EXPORT {ExportName}:
@@ -933,25 +1654,32 @@ EXPORT {ExportName}:
   condition   : {when this export applies — "ALWAYS" if unconditional}
   value       : {the constraint, rule, or data being exported}
   override    : NEVER | WITH_JUSTIFICATION | UNRESTRICTED
-  source_ref  : [SEC:x.x]  -- which section of THIS spec defines the basis
+  source_ref  : [SEC:SectionName.x]  -- which section of THIS spec defines the basis
 ```
 
 **Export types:**
-- `CONSTRAINT` — a limit that restricts behavior (e.g., max memory, timeout ceiling)
-- `INVARIANT` — a property that must always hold at runtime, verified continuously
-- `SEED_DATA` — initial state to populate at deploy time (e.g., default config values)
-- `POLICY` — a behavioral default (e.g., retry strategy, logging level)
+- `CONSTRAINT` — a limit that restricts behavior
+- `INVARIANT` — a property that must always hold at runtime
+- `SEED_DATA` — initial state to populate at deploy time
+- `POLICY` — a behavioral default
 
 **Override levels:**
-- `NEVER` — cannot be overridden by any consumer. Use for safety invariants, physical
-  limits, and security boundaries. Two conflicting NEVER exports cause a build failure.
+- `NEVER` — cannot be overridden. Two conflicting NEVER exports cause a build failure.
 - `WITH_JUSTIFICATION` — can be overridden if the consumer documents why.
 - `UNRESTRICTED` — consumer can freely override.
 
-### 16.2 Expects
+**For PATTERN specs:** Exports are architectural constraints enforced at implementation
+time. Example: a Repository pattern exports "all data access must go through a
+repository interface." The agent must follow this when implementing any SYSTEM spec
+that declares `USES PATTERN: Repository`.
 
-Expects are contracts this spec requires from its dependencies. If a dependency
-does not export a matching contract, the build fails with a clear error.
+**For ASSET specs:** Exports are design constraints from the style guide (Functions section
+RULEs and TOKENs). Example: a design system exports "minimum touch target is 44px",
+"primary color is #1a73e8." These are enforced when generating UI code in any SYSTEM
+spec that declares `USES ASSET:`. The agent reads the ASSET spec's Functions section (style
+guide) and FileStructure section (asset catalog) to know what files exist and how to use them.
+
+### Contracts.2 Expects
 
 ```
 EXPECTS {ExpectName}:
@@ -962,7 +1690,7 @@ EXPECTS {ExpectName}:
   fallback    : {default value if required=false and no dependency provides it}
 ```
 
-### 16.3 Conflict Resolution
+### Contracts.3 Conflict Resolution
 
 When multiple dependencies export constraints that affect the same target:
 
@@ -971,13 +1699,12 @@ When multiple dependencies export constraints that affect the same target:
 3. Spec closer to the dependency root (fewer hops) wins.
 4. If still ambiguous, the build fails with a clear error.
 
-### 16.4 Notes for Spec Authors
+### Contracts.4 Notes for Spec Authors
 
 - Every spec that other specs depend on SHOULD define its EXPORTS explicitly.
 - If your spec has no exports, state: `EXPORTS: none — this spec is a leaf.`
 - The seed resolver walks the full dependency graph and collects all exports before
   any code is generated. Conflicts are caught at build time, not runtime.
-- For details on the resolution algorithm, see `specs/seed-resolver-spec.md`.
 
 ---
 
@@ -1002,9 +1729,9 @@ IMPORT {EnumName} FROM {spec-name}-spec.md Section {x.x}
 
 Example:
 ```
-IMPORT ConstraintMask FROM cra-spec.md Section 4.3
-IMPORT KernelDefinition FROM cra-spec.md Section 4.5
-IMPORT QueryResponse FROM search-service-spec.md Section 4.2
+IMPORT ConstraintMask FROM cra-spec.md DataModel.3
+IMPORT KernelDefinition FROM cra-spec.md DataModel.5
+IMPORT QueryResponse FROM search-service-spec.md DataModel.2
 ```
 
 The coding agent must read the imported definition from the referenced spec file.

@@ -22,6 +22,45 @@ You have access to the nlspec MCP server. Use its tools to read, query, and
 modify specs. Do NOT read spec files directly from the filesystem — the MCP server
 provides structured, indexed access.
 
+Specs have a TYPE: SYSTEM (running code), PATTERN (reusable blueprint), or ASSET
+(static resources). Check the spec header to determine the type. PATTERN and ASSET
+specs are consumed by SYSTEM specs via "USES PATTERN:" and "USES ASSET:" in Architecture.3.
+
+---
+
+## Spec Tolerance
+
+Specs come in many shapes. Your job is to work with what's there, not demand perfection.
+
+**Strict specs** have a SECTIONS declaration block, typed elements (RECORD, FUNCTION,
+SCENARIO), cross-references (USES, THROWS, [SEC:] tags), and a declared TYPE. Full
+tooling works. Gap detection is precise.
+
+**Loose specs** have `## ` section headers but no SECTIONS block. Maybe they use
+plain prose instead of formal RECORD/FUNCTION blocks. Maybe sections have unusual names.
+The parser discovers structure from headers and pattern-matches elements. Everything
+still works — slicing, implementation, validation — just with less precision.
+
+**Minimal specs** might be a single markdown file with a description, some function
+signatures, and a few behavioral notes. The agent does its best: extract what structure
+exists, infer what's missing, and report gaps.
+
+**Rules for tolerance:**
+- Never refuse to parse or implement a spec because it's missing structure.
+- Never insist a user add a SECTIONS block, formal elements, or specific sections.
+- When structure is missing, INFER what you can and REPORT what you can't.
+- Gap detection is always advisory. The human decides whether to fix gaps.
+- The NLSPEC-TEMPLATE is a recommendation, not a requirement. Specs that diverge
+  from it are first-class citizens.
+
+**Gap detection via nlspec_validate:**
+- The validate tool returns a GapReport with parse mode (strict/loose) and gaps
+- CRITICAL gaps: missing definitions referenced by other elements, broken cross-refs
+- WARNING gaps: FUNCTIONs without USES/THROWS, SCENARIOs without [SEC:] tags
+- INFO gaps: missing common sections for the TYPE, large unstructured prose blocks
+- In loose mode, "missing declared sections" gaps don't apply (nothing was declared)
+- completeness score (0.0-1.0) gives a rough measure of spec maturity
+
 ---
 
 ## Available MCP Tools
@@ -61,8 +100,10 @@ search across all namespaces.
 
 ## Operating Modes
 
-You operate in one of six modes. The human tells you which mode, or you infer it
+You operate in one of seven modes. The human tells you which mode, or you infer it
 from the instruction. If ambiguous, ask.
+
+**Pipeline: DESIGN → SPEC → IMPLEMENT → VALIDATE**
 
 ### MODE: SPEC
 
@@ -71,20 +112,24 @@ Trigger:  "spec", "refine", "review spec", "write spec", "help me spec", "add sc
 Input:    A spec (identified by namespace/spec_id) and human guidance
 Output:   An improved spec
 Process:
-  1. Call nlspec_validate to get current integrity status
+  1. Call nlspec_validate to get current integrity status and gap report
+     - The validator reports parse mode (strict vs loose) and gaps by severity
   2. Call nlspec_list to survey all elements
-  3. Analyze for completeness and consistency:
-     a. Are all 16 sections present?
-     b. Call nlspec_search({element_type: "FUNCTION"}) — do all have USES and THROWS?
-     c. Call nlspec_search({element_type: "RECORD"}) — do all have USED BY?
-     d. Call nlspec_search({element_type: "SCENARIO"}) — do all have [SEC:] tags?
-     e. Use nlspec_graph to find orphaned elements (no incoming references)
-     f. Find sections with no SCENARIOs
-  4. If the human asked for specific help (e.g., "add scenarios for Section 5"),
+  3. Review the gap report:
+     - CRITICAL gaps: report immediately (missing definitions, broken refs)
+     - WARNING gaps: include in findings (missing USES/THROWS, untagged scenarios)
+     - INFO gaps: mention as suggestions (missing common sections, unstructured prose)
+  4. Additional analysis:
+     a. Call nlspec_search({element_type: "FUNCTION"}) — do all have USES and THROWS?
+     b. Call nlspec_search({element_type: "RECORD"}) — do all have USED BY?
+     c. Call nlspec_search({element_type: "SCENARIO"}) — do all have [SEC:] tags?
+     d. Use nlspec_graph to find orphaned elements (no incoming references)
+     e. Find sections with no SCENARIOs
+  5. If the human asked for specific help (e.g., "add scenarios for Functions section"),
      focus there. Otherwise, report findings and suggest improvements.
-  5. Propose changes — do NOT modify the spec without human approval
-  6. When approved, use nlspec_create/nlspec_update to make changes
-  7. Call nlspec_validate again to confirm improvements
+  6. Propose changes — do NOT modify the spec without human approval
+  7. When approved, use nlspec_create/nlspec_update to make changes
+  8. Call nlspec_validate again to confirm improvements
 Validation: Spec is internally consistent. Human approves all changes.
 
 IMPORTANT:
@@ -96,27 +141,69 @@ IMPORTANT:
   - When adding RECORDs, always add USED BY references.
   - When adding SCENARIOs, always add [SEC:] tags and a tier ([SMOKE], [AFFECTED], [FULL]).
   - Use nlspec_graph to understand impact before suggesting changes to shared elements.
+  - For loose specs, SUGGEST adding a SECTIONS block but don't require it.
+  - Never refuse to work with a spec because it lacks a SECTIONS declaration.
 
 DEPENDENCY CONTRACT RULES (for specs with IMPORTS or EXPORTS):
-  - When modifying Section 16 EXPORTS, call nlspec_graph({direction: "incoming"})
-    to find every spec that imports from this one. Changing an override=NEVER
-    export can break every downstream consumer. Report the blast radius before
-    proposing the change.
-  - When adding new EXPECTS, call nlspec_get on the dependency's Section 16
-    to verify it actually exports a matching contract.
-  - When reviewing a spec for completeness, also check Section 16:
-    g. Does every IMPORT have a corresponding EXPECTS declaration?
-    h. Are all EXPORTS grounded in real sections (source_ref points to existing content)?
-    i. Are override levels appropriate (NEVER for safety, WITH_JUSTIFICATION for policies)?
-    j. Call nlspec_seed_resolve with dry_run=true to verify the full contract chain resolves.
+  - When modifying Contracts section EXPORTS, call nlspec_graph({direction: "incoming"})
+    to find all downstream consumers. Report the blast radius before proposing changes.
+  - Call nlspec_seed_resolve with dry_run=true to verify the full contract chain.
+  - For PATTERN specs: ensure all architectural constraints are exported.
+  - For ASSET specs: ensure all design constraints are exported.
+```
+
+### MODE: DESIGN
+
+```
+Trigger:  "design", "architect", "propose architecture", "plan the system",
+          "what patterns should", "design this", "lay out the architecture"
+Input:    A problem statement (Problem section) or partial spec, plus human guidance
+Output:   A partial spec: Abstract, Problem, Architecture, 15, 16 filled in. All other
+          sections left as template placeholders.
+Process:
+  1. Read the problem statement via nlspec_get or from human's description
+  2. Propose an architecture:
+     a. Draw the ASCII diagram (Architecture section)
+     b. Write the component inventory (Architecture section.1)
+     c. Map the primary data flows (Architecture section.2)
+  3. Select patterns:
+     a. Call nlspec_get on pattern-catalog.md for prior art patterns.
+        Write USES PATTERN declarations in Architecture.3.
+     b. If novel patterns are needed, note them as future TYPE: PATTERN specs.
+  4. Identify assets needed:
+     a. Check existing ASSET specs via nlspec_list({type: "ASSET"}).
+     b. Check workspace for asset files (styles/, assets/ directories).
+     c. If asset files exist but no ASSET spec catalogs them, note that an
+        ASSET spec needs to be created with FileStructure section (catalog) and Functions section
+        (style guide with RULEs and TOKENs).
+     d. Write USES ASSET declarations for existing or planned ASSET specs.
+  5. Map dependencies:
+     a. Call nlspec_graph to see the existing dependency landscape.
+     b. Write IMPORTS for specs this system depends on (Appendix B).
+     c. Write Contracts section EXPORTS and EXPECTS.
+     d. Call nlspec_seed_resolve with dry_run=true to validate contracts.
+  6. Define boundaries (Boundaries section)
+  7. Write the abstract (Abstract section)
+  8. Save partial spec via nlspec_patch and present for human review
+
+OUTPUT FORMAT:
+  - Abstract, Problem, Architecture (with 3.1, 3.2, 3.3), 15, 16: fully written
+  - All other sections: template headers with one-line notes
+  - A "Design Decisions" appendix listing key choices and alternatives
+
+IMPORTANT:
+  - DESIGN mode produces ARCHITECTURE, not code.
+  - The output is a starting point for SPEC mode, which fills in the details.
+  - Always explain WHY a pattern was chosen, not just which one.
+  - For multi-spec systems, also produce a dependency diagram showing which
+    specs import from which, and the build order.
 ```
 
 ### MODE: DESCRIBE
 
 ```
 Trigger:  "describe", "explain", "walk me through", "what does", "how does",
-          "summarize", "overview", "tell me about", "onboard me",
-          "what depends on", "what does this export", "trace the dependencies"
+          "summarize", "overview", "tell me about", "onboard me"
 Input:    A spec (or specific section/element) identified by namespace/spec_id
 Output:   Human-readable explanation. No modifications to anything.
 Process:
@@ -132,32 +219,26 @@ Process:
      - What does the architecture look like?
   3. Adapt depth to the question:
      - "What does this system do?" → high-level summary (abstract + architecture)
-     - "Explain Section 5.3" → detailed walkthrough of that function
+     - "Explain Functions section.3" → detailed walkthrough of that function
      - "How does auth work?" → trace the flow via nlspec_graph
-     - "What scenarios cover storage?" → nlspec_search({tags: ["SEC:5.3"], element_type: "SCENARIO"})
+     - "What scenarios cover storage?" → nlspec_search({tags: ["SEC:Functions.3"], element_type: "SCENARIO"})
   4. If asked, produce visual aids:
      - Component diagrams (mermaid)
      - Dependency graphs from nlspec_graph
      - Element inventories from nlspec_list
      - Coverage reports from nlspec_validate
-  5. For dependency chain questions:
-     - "What does this spec depend on?" → call nlspec_graph to get the full
-       dependency tree. For each dependency, read its Section 16 EXPORTS and
-       explain what contracts flow into this spec.
-     - "What does this spec export?" → call nlspec_get({section: "16"}) and
-       explain each EXPORT in plain language: what it constrains, what type
-       (CONSTRAINT/INVARIANT/SEED_DATA/POLICY), who it affects, override level.
-     - "What would this system boot with?" → call nlspec_seed_resolve with
-       dry_run=true. Walk through each seed rule in the manifest, explaining
-       its provenance (rule → export → spec → section) in human terms.
-     - "Where does this constraint come from?" → call nlspec_seed_audit for
-       the specific rule. Trace the full chain back to the originating spec.
-     - "What breaks if I change this export?" → call nlspec_graph with
-       direction=incoming on the export's spec to find all consumers. List
-       every spec that depends on this contract and what they EXPECT from it.
-     - "Show me the full dependency graph" → call nlspec_graph for the entry
-       spec and render as mermaid diagram showing specs, imports, and exported
-       contract types.
+  5. Check spec TYPE and adapt:
+     - SYSTEM: explain what the system does and how
+     - PATTERN: explain when to use it, what it constrains, how consumers apply it
+     - ASSET: explain what resources are provided and what design constraints apply
+  6. For dependency chain questions:
+     - "What does this spec depend on?" → call nlspec_graph for the dependency tree.
+       For each dependency, read its Contracts section EXPORTS.
+     - "What does this spec export?" → call nlspec_get({section: "Contracts"})
+     - "What patterns does this use?" → read Architecture.3, explain each pattern
+     - "What would this system boot with?" → call nlspec_seed_resolve with dry_run=true
+     - "Where does this constraint come from?" → call nlspec_seed_audit
+     - "What breaks if I change this export?" → call nlspec_graph with direction=incoming
 
 IMPORTANT:
   - In DESCRIBE mode you are READ-ONLY. Do not modify any specs or files.
@@ -166,8 +247,6 @@ IMPORTANT:
   - If you spot something clearly broken (e.g., dangling reference), you may
     mention it briefly, but do not derail into SPEC mode.
   - This mode is for understanding, not editing.
-  - When describing dependencies, use nlspec_get to read actual imported specs.
-    Do NOT guess at what an imported spec contains.
 ```
 
 ### MODE: IMPLEMENT
@@ -177,39 +256,69 @@ Trigger:  "implement", "build", "create", "start"
 Input:    A spec identified by namespace and spec_id
 Output:   Complete codebase matching the spec
 Process:
-  1. Call nlspec_get to read the full spec, section by section
-  2. Start with Section 12 (File Structure) — create the directory layout
-  3. Implement Section 4 (Data Model) — call nlspec_list({element_type: "RECORD"})
-  4. Implement Section 7 (Error Model) — call nlspec_get({section: "7"})
-  5. Implement Section 5 (Core Functions) — call nlspec_list({element_type: "FUNCTION"})
-  6. Implement Section 6 (API Surface) — call nlspec_list({element_type: "ENDPOINT"})
-  7. Implement Section 8 (Configuration) — call nlspec_list({element_type: "CONFIG"})
-  8. Write tests for ALL Section 10 scenarios — call nlspec_list({element_type: "SCENARIO"})
-  9. Run all tests. Fix until ALL pass.
-  10. Implement Section 14 (Build and Run) — verify build commands work
-  11. If spec has IMPORTS, call nlspec_seed_resolve to validate dependency
-      contracts (Section 16) — all EXPECTS must be satisfied by EXPORTS.
-Validation: ALL scenarios pass. No exceptions.
+  1. Call nlspec_validate to get gap report and parse mode
+     - If CRITICAL gaps: report to human, ask whether to proceed or fix spec first
+     - If only WARNING/INFO gaps: note them and proceed
+  2. Install dependencies:
+     a. Call nlspec_list({element_type: "DEPENDENCY"}) to get all declarations
+     b. Install each using the declared `install` command and `version`
+     c. Run the `verify` check for each
+     d. CRITICAL: After install, read the ACTUAL installed artifact's API surface,
+        type definitions, or asset listing. Do NOT trust training knowledge for
+        version-specific APIs. Use the installed reality when writing code.
+  3. Adapt your implementation plan to what the spec provides:
+     a. Call nlspec_get({section: "FileStructure"}) — if found, create the layout.
+        If not found, infer from the language target and conventions.
+     b. Call nlspec_list({element_type: "RECORD"}) — if found, implement all.
+        If none, extract data structures from FUNCTION signatures.
+     c. Call nlspec_get({section: "Errors"}) — if found, implement all error types.
+        If not found, implement errors from THROWS declarations.
+     d. Call nlspec_list({element_type: "FUNCTION"}) — implement in dependency order
+     e. Call nlspec_list({element_type: "ENDPOINT"}) — wire to core functions
+     f. Call nlspec_list({element_type: "CONFIG"}) — implement config loading
+     g. Call nlspec_list({element_type: "SCENARIO"}) — write tests for ALL.
+        If no scenarios: WARN human "No scenarios. Cannot validate correctness."
+     h. Run all tests. Fix until ALL pass or MAX_RETRIES reached.
+     i. Call nlspec_list({element_type: "ARTIFACT"}) — verify each artifact exists
+        and passes its checkable command.
 
-DEPENDENCY BOUNDARY RULES (critical for multi-spec projects):
-  - When you encounter an IMPORT, call nlspec_get on the referenced section
-    from the imported spec. Implement against the interface contract — not an
-    invented implementation.
-  - Do NOT hallucinate implementations for imported components. If the spec
-    says "IMPORT Token FROM auth-spec Section 4.1", use that RECORD definition
-    exactly. Do not invent fields, methods, or behaviors.
-  - Do NOT fill gaps in imported contracts with assumptions. If the exported
-    interface is insufficient to implement against, STOP and report:
-    "Section X.X requires {what} from {spec}, but the contract does not
-    specify {what's missing}."
-  - Before implementing, call nlspec_seed_resolve to generate the seed manifest.
-    The manifest contains resolved constraints, invariants, policies, and initial
-    data from all dependencies. These are non-negotiable — implement against them.
-  - Call nlspec_seed_audit for any constraint you're unsure about to trace its
-    provenance back to the originating spec and section.
-  - Treat imported definitions as READ-ONLY. Never modify another spec's
-    RECORDs, FUNCTIONs, or contracts. If a change is needed, create a patch
-    against the source spec: nlspec_patch_create({namespace: ..., spec_id: ...})
+EXIT CRITERIA (all must be true for success):
+  ✓ Code compiles / passes type checking
+  ✓ ALL scenarios pass
+  ✓ ALL declared ARTIFACTs exist and pass their checkable commands
+  ✓ No CRITICAL gaps remain unaddressed
+  → If all true: EXIT SUCCESS
+
+RETRY LOGIC:
+  MAX_RETRIES: 3 per failing scenario (not 3 total — 3 per distinct failure)
+  On each retry: classify failure, apply appropriate strategy, re-run affected scenarios.
+  After MAX_RETRIES for a single failure: ESCALATE.
+
+FAILURE CLASSIFICATION (autonomous — no human needed):
+  SPEC_GAP:  spec is missing info → file Category A patch, proceed best-effort
+  IMPL_BUG:  code is wrong → fix the code, normal retry
+  ENV_ISSUE: build environment broken → report and stop, do NOT retry
+  AMBIGUITY: spec is unclear → try alternative interpretation on retry
+
+ESCALATION: produce structured report to build/escalation-report.json (see CLAUDE.md
+for full format). In dark factory mode: exit non-zero. In interactive: present to human.
+
+TYPE-SPECIFIC BEHAVIOR:
+  - SYSTEM: Implement as a deployable service/library/application.
+  - PATTERN: Implement as a reusable module/library. No standalone deployment.
+  - ASSET: Package and validate assets. Verify constraints are machine-readable.
+
+DEPENDENCY BOUNDARY RULES:
+  - Read Architecture.3 for USES PATTERN and USES ASSET declarations. For prior art
+    patterns (no FROM), implement using your training knowledge. For novel patterns
+    (FROM spec.md), read the referenced PATTERN spec via nlspec_get.
+  - When you encounter an IMPORT, call nlspec_get on the referenced section only.
+    Implement against the interface contract — do NOT hallucinate implementations.
+  - If the contract is insufficient, STOP and report what's missing.
+  - Call nlspec_seed_resolve before implementing to generate the seed manifest.
+    The resolved constraints are non-negotiable.
+  - Call nlspec_seed_audit for any constraint you're unsure about.
+  - Treat imported definitions as READ-ONLY.
 ```
 
 ### MODE: FIX
@@ -223,29 +332,34 @@ Process:
      - If given a scenario number:
        nlspec_slice({scenario: 7})
      - If given a section/function:
-       nlspec_slice({section: "5.3"})
+       nlspec_slice({section: "Functions.3"})
      - The slice contains ONLY the elements you need.
   2. If a PATCH exists, call nlspec_patch_list to find it
-  3. Identify the root cause in the existing code
-  4. Fix ONLY the affected code
-  5. Do NOT refactor unrelated code
-  6. Do NOT modify files unrelated to the fix
-  7. Run SMOKE scenarios + AFFECTED scenarios (by [SEC:x.x] tags)
-  8. If all pass, you're done
-  9. If SMOKE fails, something fundamental broke — stop and report
-Validation: Failing scenario now passes. SMOKE scenarios still pass.
+  3. Classify the failure (SPEC_GAP, IMPL_BUG, ENV_ISSUE, or AMBIGUITY)
+  4. Act on classification:
+     - SPEC_GAP: call nlspec_patch_create (Category A), proceed best-effort
+     - IMPL_BUG: fix the code (normal path)
+     - ENV_ISSUE: report and stop
+     - AMBIGUITY: try alternative interpretation
+  5. Fix ONLY the affected code
+  6. Run SMOKE scenarios + AFFECTED scenarios (by [SEC:SectionName.x] tags)
+  7. If all pass, you're done
+  8. If SMOKE fails, something fundamental broke — stop and report
 
-DEPENDENCY CONSTRAINT RULES (for specs with IMPORTS):
-  - Before finalizing a fix, verify it does not violate any dependency contract.
-    Call nlspec_seed_resolve with dry_run=true or check the existing seed manifest.
-  - If the fix requires changing an imported RECORD's usage or violating a
-    constraint from a dependency, STOP and report: "This fix would violate
-    {constraint} from {spec}. The constraint has override={level}."
-  - Call nlspec_seed_audit on any constraint you're unsure about to trace its
-    origin before deciding whether the fix is valid.
-  - Do NOT work around dependency constraints. If the constraint is wrong,
-    the dependency spec needs to change — file a patch against that spec:
-    nlspec_patch_create({namespace: ..., spec_id: ...})
+EXIT CRITERIA:
+  ✓ The originally failing scenario now passes
+  ✓ All SMOKE scenarios still pass
+  ✓ All AFFECTED scenarios still pass
+  ✓ No dependency contract violations (call nlspec_seed_resolve to verify)
+
+RETRY LOGIC:
+  MAX_RETRIES: 3 per failing scenario. Different approach each time.
+  After MAX_RETRIES: ESCALATE with structured report.
+
+DEPENDENCY CONSTRAINT RULES:
+  - Before finalizing, call nlspec_seed_resolve to verify no contract violations.
+  - If the fix would violate a dependency constraint, STOP and report.
+  - Call nlspec_seed_audit to trace which spec owns the constraint.
 ```
 
 ### MODE: VALIDATE
@@ -253,24 +367,35 @@ DEPENDENCY CONSTRAINT RULES (for specs with IMPORTS):
 ```
 Trigger:  "validate", "test", "verify", "check", "nightly"
 Input:    Nothing new
-Output:   Test results report + spec integrity check + dependency contract status
+Output:   Structured validation report
 Process:
-  1. Call nlspec_validate to check spec structural integrity
+  1. Call nlspec_validate to check spec structural integrity and get gap report
   2. Run ALL scenario tests (full suite)
-  3. Report: which pass, which fail, performance numbers
-  4. Report: any validation warnings (orphaned records, untested sections)
-  5. If spec has IMPORTS, call nlspec_seed_resolve with dry_run=true:
-     a. Are all EXPECTS satisfied by dependency EXPORTS?
-     b. Are there any unresolved conflicts?
-     c. Is the seed manifest stale (specs changed since last resolve)?
-  6. Verify the implementation honors all seed rules:
-     a. Are CONSTRAINT rules respected in the code?
-     b. Are INVARIANT rules continuously true at runtime?
-     c. Were SEED_DATA rules applied during initialization?
-     d. Are POLICY defaults in effect unless explicitly overridden?
-  7. Report any contract violations alongside test results
+  3. Call nlspec_list({element_type: "ARTIFACT"}) — verify each artifact exists
+     and passes its checkable command
+  4. Call nlspec_seed_resolve to verify all dependency contracts are satisfied
+  5. Run drift detection:
+     a. Compare code's public API surface against spec's API declarations
+     b. Compare code's error types against spec's Errors section
+     c. Compare code's config schema against spec's Config section
+  6. Produce structured VALIDATION REPORT:
+     {
+       spec_id: "...",
+       mode: "VALIDATE",
+       scenarios: {total: N, passed: N, failed: N},
+       artifacts: {declared: N, verified: N, missing: [...]},
+       contracts: {honored: N, violated: N},
+       drift: {clean: true|false, drifted_elements: [...]},
+       overall: "PASS" | "FAIL" | "WARN"
+     }
+  7. Write report to build/validation-report.json
   8. Do NOT fix anything — just report
-Validation: Report only. Human decides next action.
+
+EXIT CRITERIA:
+  ✓ Report is produced (VALIDATE always succeeds as a mode)
+  → overall: "PASS" if zero failures, zero artifact issues, zero drift
+  → overall: "WARN" if only warnings
+  → overall: "FAIL" if any scenario fails, artifact missing, or drift detected
 ```
 
 ### MODE: CONSOLIDATE
@@ -285,16 +410,24 @@ Process:
   3. Compare current code against updated spec
   4. Refactor where spec has changed
   5. Remove any workarounds that patches introduced
-  6. If spec has IMPORTS, re-validate dependency contracts:
-     a. Call nlspec_seed_resolve to regenerate the seed manifest
-     b. Have any dependency EXPORTS changed since the last manifest?
-     c. Do absorbed patches introduce new EXPECTS that need matching?
-     d. Verify the consolidated code honors all updated seed rules
-  7. Run ALL scenario tests
-  8. Call nlspec_validate to verify spec integrity
-  9. Clean up: remove dead code, align naming, update comments
-Validation: ALL scenarios pass. Seed manifest is current. Spec validates clean.
-Code aligned with consolidated spec and all dependency contracts.
+  6. Run ALL scenario tests
+  7. Call nlspec_validate to verify spec integrity
+  8. Call nlspec_list({element_type: "ARTIFACT"}) — verify all artifacts
+  9. If spec has IMPORTS, call nlspec_seed_resolve to regenerate the seed manifest.
+     Verify consolidated code honors all updated seed rules.
+  10. Run drift detection to verify code and spec are in sync
+  11. Clean up: remove dead code, align naming, update comments
+
+EXIT CRITERIA:
+  ✓ ALL scenarios pass
+  ✓ ALL artifacts verified
+  ✓ Seed manifest is current (if applicable)
+  ✓ No dependency contract violations
+  ✓ No drift between spec and code
+  → If all true: EXIT SUCCESS with version bump
+
+RETRY / ESCALATION: Same as IMPLEMENT — classify failures, retry up to 3 times
+per distinct failure, escalate with structured report if exhausted.
 ```
 
 ---
@@ -310,8 +443,8 @@ You do NOT read the whole spec. You do NOT navigate manually.
 STEP 1: Call nlspec_slice.
   If you have a scenario number:
     nlspec_slice({namespace: "myproject", spec_id: "auth", scenario: 7})
-  If you have a section number:
-    nlspec_slice({namespace: "myproject", spec_id: "auth", section: "5.3"})
+  If you have a section name:
+    nlspec_slice({namespace: "myproject", spec_id: "auth", section: "Functions.3"})
 
 STEP 2: Read the slice.
   The slice contains:
@@ -335,7 +468,7 @@ RULE: If the slice is insufficient, use nlspec_search to find related elements.
 
 RULE: If you discover the bug spans multiple sections, call nlspec_slice on
   each section and merge the results. Report this to the human:
-  "Fix requires changes across Sections 5.1 and 5.3. Expanded context."
+  "Fix requires changes across Functions.1 and Functions.3. Expanded context."
 
 RULE: Use nlspec_graph to understand impact before making changes:
   nlspec_graph({element_id: "myproject/auth:4.1:record:Token", direction: "incoming"})
@@ -354,11 +487,11 @@ SMOKE scenarios [SMOKE]:
   - Target: < 30 seconds total
   - Find them: nlspec_list({element_type: "SCENARIO", tags: ["SMOKE"]})
 
-AFFECTED scenarios [SEC:x.x]:
+AFFECTED scenarios [SEC:SectionName.x]:
   - Run when the corresponding section is modified
   - Determined by [SEC:] tags in scenario headers
   - In FIX mode, run all scenarios matching the changed section(s)
-  - Find them: nlspec_search({tags: ["SEC:5.3"], element_type: "SCENARIO"})
+  - Find them: nlspec_search({tags: ["SEC:Functions.3"], element_type: "SCENARIO"})
 
 FULL suite:
   - Run in VALIDATE and CONSOLIDATE modes
@@ -369,13 +502,89 @@ FULL suite:
 
 ---
 
+## Drift Detection — Spec vs Code Integrity
+
+After IMPLEMENT, code and spec are in sync. Over time, they can drift. Drift detection
+catches this during VALIDATE and CONSOLIDATE modes.
+
+**What drift detection checks:**
+
+```
+1. API SURFACE DRIFT — ENDPOINTs in spec vs routes in code
+2. DATA MODEL DRIFT — RECORDs in spec vs struct/class definitions in code
+3. ERROR TYPE DRIFT — Errors section vs code's error types
+4. CONFIG DRIFT — Config section vs code's config structs
+5. ARTIFACT DRIFT — ARTIFACT declarations vs actual build outputs
+```
+
+**How to perform drift detection (Phase 1+):**
+
+Use MCP tools to get the spec's declarations, then compare against code:
+1. Call nlspec_list({element_type: "ENDPOINT"}) — get all declared endpoints
+2. Call nlspec_list({element_type: "RECORD"}) — get all declared records
+3. Read corresponding code files and compare
+4. Report mismatches in the validation report's `drift` field
+
+Drift is not always a bug — sometimes the code evolved correctly but the spec
+didn't keep up. The agent reports drift but does not decide whose version is
+correct. That's a human decision (or a SPEC mode task).
+
+---
+
+## Autonomous Execution — Dark Factory Mode
+
+When instructed to run autonomously (e.g., "implement this end to end", "dark factory",
+"run the full pipeline"), the agent chains modes together without human intervention.
+
+### Autonomous Pipeline Steps
+
+```
+STEP 1: SPEC VALIDATION
+  Call nlspec_validate. Check gap report.
+  CRITICAL gaps + no existing code → ESCALATE.
+  Otherwise → proceed.
+
+STEP 2: IMPLEMENT
+  Run IMPLEMENT mode with full exit criteria and retry logic.
+  SPEC_GAP → call nlspec_patch_create, continue.
+  IMPL_BUG → retry up to 3 times.
+  ENV_ISSUE → ESCALATE immediately.
+
+STEP 3: VALIDATE
+  Run VALIDATE mode. Produces structured validation report.
+  Check: scenarios, artifacts, contracts, drift.
+
+STEP 4: DECISION GATE
+  If PASS → EXIT SUCCESS.
+  If FAIL (IMPL_BUG) → enter FIX mode, then re-VALIDATE.
+  If FAIL (SPEC_GAP) → file patch via nlspec_patch_create, EXIT with patches filed.
+  If FAIL (ENV_ISSUE) → EXIT with environment report.
+  If FIX exhausts retries → ESCALATE.
+
+STEP 5: EXIT
+  Write build/pipeline-result.json with full structured report.
+```
+
+### Guard Rails
+
+```
+RULE: The pipeline NEVER modifies the spec. It files patches (separate documents).
+RULE: The pipeline NEVER enters an infinite loop. Retry counters are strict.
+RULE: The pipeline NEVER retries ENV_ISSUE. Report and stop.
+RULE: Maximum total FIX attempts across all scenarios: 10.
+RULE: ARTIFACT declarations define "done." Tests passing without artifacts is incomplete.
+RULE: All decisions are written to structured JSON reports for traceability.
+```
+
+---
+
 ## Code Style Rules
 
 ```
-RULE: Match the language idioms specified in Section 1 of the spec.
-RULE: Error handling must match Section 7 exactly — no swallowing errors.
+RULE: Match the language idioms specified in Abstract section of the spec.
+RULE: Error handling must match the Errors section exactly — no swallowing errors.
 RULE: Every public function must have a doc comment referencing the spec section.
-      Example: /// Implements Section 5.3: query_execute
+      Example: /// Implements Functions section.3: query_execute
 RULE: Every test file must reference the scenario number.
       Example: // SCENARIO 7: Query returns results within latency budget
 RULE: Do not add features not in the spec. No "helpful" extras.
@@ -433,7 +642,7 @@ When the project has multiple specs in namespaces:
 
 ```
 RULE: Use namespace-qualified queries:
-  nlspec_get({namespace: "myproject", spec_id: "auth", section: "5.1"})
+  nlspec_get({namespace: "myproject", spec_id: "auth", section: "Functions.1"})
 
 RULE: When fixing a bug, nlspec_slice follows cross-spec imports automatically.
   The slice may include elements from multiple specs. This is expected.
@@ -458,11 +667,16 @@ RULE: After any structural change, validate:
 ❌ Do NOT read spec files directly from the filesystem (use MCP tools)
 ❌ Do NOT read the full spec when in FIX mode (use nlspec_slice)
 ❌ Do NOT rewrite files unrelated to the current task
-❌ Do NOT add dependencies not listed in Section 11
+❌ Do NOT add dependencies not listed in the Dependencies section
 ❌ Do NOT modify scenario tests to match your code (scenarios are immutable)
 ❌ Do NOT skip SMOKE tests (they catch cascading breakage)
 ❌ Do NOT "improve" code style when fixing a bug (separate concerns)
-❌ Do NOT create new public API not defined in Section 6
+❌ Do NOT create new public API not defined in the API section
 ❌ Do NOT modify imported elements from other specs (patch the source spec)
 ❌ Do NOT assume — use nlspec_search and nlspec_graph when context is insufficient
+❌ Do NOT trust training knowledge for dependency APIs — read the INSTALLED artifact
+❌ Do NOT substitute a different library/version than what the spec declares
+❌ Do NOT use icon/asset names from memory — verify against the installed asset pack
+❌ Do NOT generate config for a dependency based on training data — verify the
+   config schema matches the installed version
 ```
