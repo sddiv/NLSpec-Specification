@@ -53,7 +53,7 @@ Output:   An improved spec file
 Process:
   1. Read the spec (or start from NLSPEC-TEMPLATE.md if new)
   2. Analyze for completeness and consistency:
-     a. Are all 15 sections present?
+     a. Are all 16 sections present?
      b. Does every FUNCTION have USES and THROWS declarations?
      c. Does every RECORD have USED BY references?
      d. Does every SCENARIO have [SEC:] tags?
@@ -74,13 +74,25 @@ IMPORTANT:
   - When adding FUNCTIONs, always add USES/THROWS declarations.
   - When adding RECORDs, always add USED BY references.
   - When adding SCENARIOs, always add [SEC:] tags and a tier ([SMOKE], [AFFECTED], [FULL]).
+
+DEPENDENCY CONTRACT RULES (for specs with IMPORTS or EXPORTS):
+  - When modifying Section 16 EXPORTS, check which specs import from this one.
+    Changing an override=NEVER export can break every downstream consumer.
+    Report the blast radius before proposing the change.
+  - When adding new EXPECTS, verify the dependency actually exports a matching
+    contract. Do not add an EXPECTS that no dependency can satisfy.
+  - When reviewing a spec for completeness, check Section 16:
+    h. Does every IMPORT have a corresponding EXPECTS declaration?
+    i. Are all EXPORTS grounded in real sections (source_ref points to existing content)?
+    j. Are override levels appropriate (NEVER for safety, WITH_JUSTIFICATION for policies)?
 ```
 
 ### MODE: DESCRIBE
 
 ```
 Trigger:  "describe", "explain", "walk me through", "what does", "how does",
-          "summarize", "overview", "tell me about", "onboard me"
+          "summarize", "overview", "tell me about", "onboard me",
+          "what depends on", "what does this export", "trace the dependencies"
 Input:    A spec file (or specific section/element)
 Output:   Human-readable explanation. No modifications to anything.
 Process:
@@ -100,6 +112,20 @@ Process:
      - Data flow descriptions
      - Element inventories ("47 records, 23 functions, 15 scenarios")
      - Dependency maps ("Entry is used by: storage_get, storage_set, storage_delete")
+  5. For dependency chain questions:
+     - "What does this spec depend on?" → read IMPORTS and list each dependency
+       with what is imported (RECORDs, FUNCTIONs, types)
+     - "What does this spec export?" → read Section 16 EXPORTS, explain each
+       contract in plain language (what it constrains, who it affects, can it
+       be overridden)
+     - "What would this system boot with?" → if a seed manifest exists, walk
+       through each seed rule with its provenance chain (rule → export → spec
+       → section). If no manifest exists, trace the EXPORTS from each dependency
+       and describe what the resolved state would look like.
+     - "Where does this constraint come from?" → trace from the constraint back
+       through the dependency graph to the originating spec and section
+     - "What breaks if I change this export?" → follow IMPORTS in reverse to
+       find every spec that consumes this export
 
 IMPORTANT:
   - In DESCRIBE mode you are READ-ONLY. Do not modify any files.
@@ -108,6 +134,8 @@ IMPORTANT:
   - If you spot something clearly broken (e.g., dangling reference), you may
     mention it briefly, but do not derail into SPEC mode.
   - This mode is for understanding, not editing.
+  - When describing dependencies, read the actual imported specs to give
+    accurate answers. Do NOT guess at what an imported spec contains.
 ```
 
 ### MODE: IMPLEMENT
@@ -127,7 +155,26 @@ Process:
   8. Write tests for ALL Section 10 scenarios
   9. Run all tests. Fix until ALL pass.
   10. Implement Section 14 (Build and Run) — verify build commands work
+  11. If spec has IMPORTS, check Section 16 (Dependency Contracts) —
+      verify all EXPECTS are satisfied by dependencies' EXPORTS.
 Validation: ALL scenarios pass. No exceptions.
+
+DEPENDENCY BOUNDARY RULES (critical for multi-spec projects):
+  - When you encounter an IMPORT, read ONLY the referenced section from the
+    imported spec. Implement against the interface contract — not an invented
+    implementation.
+  - Do NOT hallucinate implementations for imported components. If the spec
+    says "IMPORT Token FROM auth-spec.md Section 4.1", use that RECORD
+    definition exactly. Do not invent fields, methods, or behaviors.
+  - Do NOT fill gaps in imported contracts with assumptions. If the exported
+    interface is insufficient to implement against, STOP and report:
+    "Section X.X requires {what} from {spec}, but the contract does not
+    specify {what's missing}."
+  - If a seed manifest exists (build/seed-manifest.json), read it before
+    implementing. It contains the resolved constraints, invariants, policies,
+    and initial data from all dependencies. These are non-negotiable.
+  - Treat imported definitions as READ-ONLY. Never modify another spec's
+    RECORDs, FUNCTIONs, or contracts.
 ```
 
 ### MODE: FIX
@@ -155,6 +202,16 @@ Process:
   8. If all pass, you're done
   9. If SMOKE fails, something fundamental broke — stop and report
 Validation: Failing scenario now passes. SMOKE scenarios still pass.
+
+DEPENDENCY CONSTRAINT RULES (for specs with IMPORTS):
+  - Before finalizing a fix, check that it does not violate any dependency
+    contract. If a seed manifest exists (build/seed-manifest.json), verify
+    the fix honors all constraints and invariants listed there.
+  - If the fix requires changing an imported RECORD's usage or violating a
+    constraint from a dependency, STOP and report: "This fix would violate
+    {constraint} from {spec}. The constraint has override={level}."
+  - Do NOT work around dependency constraints. If the constraint is wrong,
+    the dependency spec needs to change — file that as a separate issue.
 ```
 
 ### MODE: VALIDATE
@@ -162,12 +219,18 @@ Validation: Failing scenario now passes. SMOKE scenarios still pass.
 ```
 Trigger:  "validate", "test", "verify", "check", "nightly"
 Input:    Nothing new (or full spec for full validation)
-Output:   Test results report
+Output:   Test results report + dependency contract status
 Process:
   1. Run ALL scenario tests (full suite)
   2. Report: which pass, which fail, performance numbers
-  3. Do NOT fix anything — just report
-  4. If failures found, list the failing scenarios with section tags
+  3. If a seed manifest exists, verify the implementation honors all seed rules:
+     a. Are all CONSTRAINT rules respected in the code?
+     b. Are all INVARIANT rules continuously true at runtime?
+     c. Were all SEED_DATA rules applied during initialization?
+     d. Are POLICY defaults in effect unless explicitly overridden?
+  4. Report any contract violations alongside test results
+  5. If failures found, list the failing scenarios with section tags
+  6. Do NOT fix anything — just report
 Validation: Report only. Human decides next action.
 ```
 
@@ -182,9 +245,15 @@ Process:
   2. Compare current code against updated spec
   3. Refactor where spec has changed (absorbed patches may have clarified behavior)
   4. Remove any workarounds that patches introduced
-  5. Run ALL scenario tests
-  6. Clean up: remove dead code, align naming, update comments
-Validation: ALL scenarios pass. Code is clean and aligned with consolidated spec.
+  5. If spec has IMPORTS, re-check Section 16:
+     a. Have any dependency EXPORTS changed since the last seed manifest?
+     b. Do absorbed patches introduce new EXPECTS that need matching?
+     c. Regenerate the seed manifest if the dependency graph has changed
+     d. Verify the consolidated code honors the updated seed rules
+  6. Run ALL scenario tests
+  7. Clean up: remove dead code, align naming, update comments
+Validation: ALL scenarios pass. Seed manifest is current. Code is clean and
+aligned with consolidated spec and all dependency contracts.
 ```
 
 ---

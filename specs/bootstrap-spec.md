@@ -1204,10 +1204,72 @@ $ npx nlspec get --spec myservice --section 5.1
 
 ---
 
+## 16. Dependency Contracts
+
+```
+### EXPORTS
+
+EXPORT SpecParser:
+  type        : CONSTRAINT
+  target      : spec_processing
+  condition   : ALWAYS
+  value       : "Ability to parse nlspec markdown into structured sections and elements
+                following the 16-section template format"
+  override    : NEVER
+  source_ref  : [SEC:5.1]
+
+EXPORT SpecStore:
+  type        : CONSTRAINT
+  target      : spec_persistence
+  condition   : ALWAYS
+  value       : "CRUD operations on spec elements with SQLite indexing and markdown
+                round-trip fidelity"
+  override    : NEVER
+  source_ref  : [SEC:5.2]
+
+EXPORT QueryEngine:
+  type        : CONSTRAINT
+  target      : spec_search
+  condition   : ALWAYS
+  value       : "FTS5 text search and structural reference queries across spec elements"
+  override    : NEVER
+  source_ref  : [SEC:5.3]
+
+EXPORT CRUDTools:
+  type        : SEED_DATA
+  target      : mcp_server
+  condition   : ALWAYS
+  value       : "8 MCP tools: nlspec_init, nlspec_get, nlspec_list, nlspec_search,
+                nlspec_create, nlspec_update, nlspec_delete"
+  override    : NEVER
+  source_ref  : [SEC:6]
+
+EXPORT ElementTypes:
+  type        : INVARIANT
+  target      : element_processing
+  condition   : ALWAYS
+  value       : "ElementType enum: RECORD, FUNCTION, ENDPOINT, SCENARIO, ENUM, ALIAS,
+                CONFIG, IMAGE, MANIFEST, INFRA, PIPELINE, TOPOLOGY, CONTRACT,
+                FAILURE_MODE, IMPORT, PROSE"
+  override    : NEVER
+  source_ref  : [SEC:4]
+
+### EXPECTS
+
+EXPECTS: none — this spec is a root dependency with no imports.
+
+### CONFLICT RESOLUTION
+
+Standard rules from NLSPEC-TEMPLATE Section 16 apply.
+All exports are override=NEVER because this is foundational infrastructure.
+```
+
+---
+
 ## Appendix A: Glossary
 
 ```
-nlspec:          Natural Language Specification — markdown document following the 15-section template
+nlspec:          Natural Language Specification — markdown document following the 16-section template
 SpecElement:     Parsed, structured unit (RECORD, FUNCTION, SCENARIO, etc.)
 MCP:             Model Context Protocol — agents use this to call nlspec tools
 Bootstrap:       This spec is implemented first, then manages everything including itself

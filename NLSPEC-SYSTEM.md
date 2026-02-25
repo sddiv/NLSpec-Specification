@@ -13,7 +13,7 @@ Nobody starts with an organizational spec. Everyone starts with one file.
 
 nlspec is designed around this reality. You start simple and grow into
 complexity. Each phase is self-contained — useful on its own, with a clear
-trigger for when you need the next one. The same 15-section template works
+trigger for when you need the next one. The same 16-section template works
 at every phase. The tooling meets you where you are.
 
 This applies to any system: a side project, a startup, an enterprise.
@@ -25,7 +25,7 @@ The spec system scales with the organization.
 
 **What you have:** A single spec file. A single agent. No tooling.
 
-**How it works:** Copy NLSPEC-TEMPLATE.md, fill in the 15 sections, hand it
+**How it works:** Copy NLSPEC-TEMPLATE.md, fill in the 16 sections, hand it
 to an agent. The agent reads the markdown directly from the filesystem and
 implements your system.
 
@@ -139,7 +139,19 @@ nlspec_split({
 ```
 
 **Defined by:** `specs/mcp-server-spec.md` — context slicing, validation,
-graph operations, namespaces, `nlspec_import`, `nlspec_split`.
+graph operations, namespaces, `nlspec_import`, `nlspec_split`. And
+`specs/seed-resolver-spec.md` — dependency contract resolution, seed manifests.
+
+**Dependency contracts come alive here.** When specs import from each other,
+Section 16 (Dependency Contracts) defines what each spec EXPORTS to its consumers
+and what it EXPECTS from its dependencies. The seed resolver walks the full
+dependency graph, collects all exports, validates all expects are satisfied,
+resolves conflicts, and produces a deterministic seed manifest — the complete
+initial state the system must boot with. No manual configuration.
+
+```
+nlspec-seed resolve specs/my-entry-spec.md --output build/seed-manifest.json
+```
 
 **When you outgrow it:** You have multiple projects, multiple teams, compliance
 requirements that cross-cut everything. The spec graph IS your organization.
@@ -477,10 +489,11 @@ search across all namespaces. With it, results are scoped.
 
 ### Self-Bootstrap
 
-The nlspec system is defined by two specs:
+The nlspec system is defined by its own specs:
 1. `specs/bootstrap-spec.md` — parser, store, query engine, 8 CRUD tools
 2. `specs/mcp-server-spec.md` — imports from bootstrap, adds context slicing,
    patches, validation, graph, namespaces, `nlspec_import`, `nlspec_split`
+3. `specs/seed-resolver-spec.md` — dependency contract resolution, seed manifests
 
 Once both are implemented and the server is running:
 
@@ -500,10 +513,10 @@ same tools it provides.
 |-------|--------------|---------------|---------------------|
 | **0** | 1 spec, 1 agent | Just a template | NLSPEC-TEMPLATE.md, CLAUDE.md |
 | **1** | 1 large spec | Structured access | Bootstrap server (8 MCP tools) |
-| **2** | N specs | Decomposition, cross-spec queries | MCP server extensions, `nlspec_split`, namespaces |
+| **2** | N specs | Decomposition, cross-spec queries | MCP server extensions, `nlspec_split`, namespaces, seed resolver |
 | **3** | N projects, N teams | Org-scale management, agent orchestration | Spec graph, validation, patches, A2A coordination |
 
-The 15-section template remains the format at every phase. Complex projects have
+The 16-section template remains the format at every phase. Complex projects have
 multiple spec files forming a dependency graph, each following the same template
 scoped to its concerns. The tooling grows with you — Phase 0 requires no tooling
 at all.

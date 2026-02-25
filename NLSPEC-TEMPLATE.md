@@ -38,6 +38,7 @@ implementation is wrong. Do not modify SCENARIOs to match your implementation.
 13. [Maintenance Workflow](#13-maintenance-workflow)
 14. [Build and Run](#14-build-and-run)
 15. [Boundaries](#15-boundaries)
+16. [Dependency Contracts](#16-dependency-contracts)
 
 ---
 
@@ -906,6 +907,77 @@ Expected output: {what you should see}
 ### Future Extensions (not in this spec):
 - {feature that might be added later but is explicitly out of scope now}
 ```
+
+---
+
+## 16. Dependency Contracts
+
+**What this spec exports to consumers and expects from dependencies.** When spec A
+declares `IMPORT spec B`, B's exports are automatically seeded as rules in A's runtime.
+This section is machine-readable — the seed resolver uses it to produce deterministic
+initialization state.
+
+If this spec has no imports and is not imported by others, state:
+`EXPORTS: none — this spec is standalone.`
+
+### 16.1 Exports
+
+Exports are constraints, rules, or data that this spec provides to any spec that
+imports it. They are instantiated automatically — the consuming spec does not need
+to reference them explicitly.
+
+```
+EXPORT {ExportName}:
+  type        : CONSTRAINT | INVARIANT | SEED_DATA | POLICY
+  target      : {which component/layer in the consumer receives this}
+  condition   : {when this export applies — "ALWAYS" if unconditional}
+  value       : {the constraint, rule, or data being exported}
+  override    : NEVER | WITH_JUSTIFICATION | UNRESTRICTED
+  source_ref  : [SEC:x.x]  -- which section of THIS spec defines the basis
+```
+
+**Export types:**
+- `CONSTRAINT` — a limit that restricts behavior (e.g., max memory, timeout ceiling)
+- `INVARIANT` — a property that must always hold at runtime, verified continuously
+- `SEED_DATA` — initial state to populate at deploy time (e.g., default config values)
+- `POLICY` — a behavioral default (e.g., retry strategy, logging level)
+
+**Override levels:**
+- `NEVER` — cannot be overridden by any consumer. Use for safety invariants, physical
+  limits, and security boundaries. Two conflicting NEVER exports cause a build failure.
+- `WITH_JUSTIFICATION` — can be overridden if the consumer documents why.
+- `UNRESTRICTED` — consumer can freely override.
+
+### 16.2 Expects
+
+Expects are contracts this spec requires from its dependencies. If a dependency
+does not export a matching contract, the build fails with a clear error.
+
+```
+EXPECTS {ExpectName}:
+  from        : {spec_id or "ANY_DEPENDENCY"}
+  type        : CONSTRAINT | INVARIANT | SEED_DATA | POLICY
+  description : {what this spec needs and why}
+  required    : true | false
+  fallback    : {default value if required=false and no dependency provides it}
+```
+
+### 16.3 Conflict Resolution
+
+When multiple dependencies export constraints that affect the same target:
+
+1. `override=NEVER` exports always win. If two NEVER exports conflict, the build fails.
+2. More restrictive constraint wins (lower limit, stricter policy).
+3. Spec closer to the dependency root (fewer hops) wins.
+4. If still ambiguous, the build fails with a clear error.
+
+### 16.4 Notes for Spec Authors
+
+- Every spec that other specs depend on SHOULD define its EXPORTS explicitly.
+- If your spec has no exports, state: `EXPORTS: none — this spec is a leaf.`
+- The seed resolver walks the full dependency graph and collects all exports before
+  any code is generated. Conflicts are caught at build time, not runtime.
+- For details on the resolution algorithm, see `specs/seed-resolver-spec.md`.
 
 ---
 

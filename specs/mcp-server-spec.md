@@ -987,7 +987,7 @@ SCENARIO 10: Re-import refreshes index                              [SEC:6.1]
 
 ```
 SCENARIO 11: Suggest decomposition of a monolith spec               [SEC:6.6] [SEC:5.6]
-  GIVEN: "myproject/monolith" is imported with 300+ elements across 15 sections
+  GIVEN: "myproject/monolith" is imported with 300+ elements across 16 sections
   AND: Sections 4.1-4.2, 5.1-5.2 have dense internal references (auth cluster)
   AND: Sections 4.3, 5.3-5.4 have dense internal references (storage cluster)
   AND: Sections 6.1-6.3 reference both clusters (api cluster)
@@ -1006,7 +1006,7 @@ SCENARIO 12: Execute decomposition creates new specs                 [SEC:6.6] [
                                    strategy: "cluster", execute: true})
   THEN: Three new spec files are created
   AND: Each new spec has correct IMPORT declarations for cross-cluster references
-  AND: Each new spec follows the 15-section template
+  AND: Each new spec follows the 16-section template
   AND: Original monolith spec is preserved (not deleted)
   AND: nlspec_validate passes for all three new specs
 ```
@@ -1139,6 +1139,113 @@ nlspec_validate({namespace: "nlspec", spec_id: "mcp-server"})
 - nlspec_migrate: Upgrade a spec to a newer template version
 - Spec versioning beyond semver (branching, merging)
 - Remote spec registries (pull specs from URLs or package registries)
+
+---
+
+## 16. Dependency Contracts
+
+```
+### EXPORTS
+
+EXPORT ContextSlicer:
+  type        : CONSTRAINT
+  target      : agent_context
+  condition   : ALWAYS
+  value       : "Dependency-traced context slicing via nlspec_slice — returns minimal
+                element set for a bug fix or section change, following USES/THROWS/
+                SEC tags across spec boundaries"
+  override    : NEVER
+  source_ref  : [SEC:5.1]
+
+EXPORT PatchManager:
+  type        : POLICY
+  target      : spec_lifecycle
+  condition   : ALWAYS
+  value       : "Tracked patch lifecycle: create → list → absorb/reject. Patches are
+                temporary amendments absorbed at version bumps."
+  override    : WITH_JUSTIFICATION
+  source_ref  : [SEC:5.2]
+
+EXPORT SpecValidator:
+  type        : CONSTRAINT
+  target      : spec_integrity
+  condition   : ALWAYS
+  value       : "Structural validation: dangling references, orphaned elements, missing
+                sections, untested sections, broken cross-spec imports"
+  override    : NEVER
+  source_ref  : [SEC:5.3]
+
+EXPORT GraphEngine:
+  type        : CONSTRAINT
+  target      : dependency_analysis
+  condition   : ALWAYS
+  value       : "Dependency graph queries: incoming/outgoing references, impact analysis,
+                cross-spec traversal"
+  override    : NEVER
+  source_ref  : [SEC:5.4]
+
+EXPORT NamespaceManager:
+  type        : SEED_DATA
+  target      : spec_organization
+  condition   : ALWAYS
+  value       : "Namespace registry for organizing specs by project, team, or domain"
+  override    : UNRESTRICTED
+  source_ref  : [SEC:5.5]
+
+EXPORT SplitEngine:
+  type        : POLICY
+  target      : spec_decomposition
+  condition   : "consumer.phase >= 2"
+  value       : "Monolith spec analysis and decomposition into multiple specs with
+                correct IMPORT declarations"
+  override    : WITH_JUSTIFICATION
+  source_ref  : [SEC:5.6]
+
+EXPORT ExtendedTools:
+  type        : SEED_DATA
+  target      : mcp_server
+  condition   : ALWAYS
+  value       : "8 MCP tools: nlspec_import, nlspec_namespaces, nlspec_slice,
+                nlspec_validate, nlspec_graph, nlspec_split, nlspec_patch_create,
+                nlspec_patch_list, nlspec_patch_absorb, nlspec_seed_resolve,
+                nlspec_seed_audit"
+  override    : NEVER
+  source_ref  : [SEC:6]
+
+### EXPECTS
+
+EXPECTS SpecParser:
+  from        : nlspec/bootstrap
+  type        : CONSTRAINT
+  description : "Ability to parse spec markdown into structured sections and elements"
+  required    : true
+  fallback    : none
+
+EXPECTS SpecStore:
+  from        : nlspec/bootstrap
+  type        : CONSTRAINT
+  description : "CRUD operations on spec elements with persistence"
+  required    : true
+  fallback    : none
+
+EXPECTS QueryEngine:
+  from        : nlspec/bootstrap
+  type        : CONSTRAINT
+  description : "Text and structural search across spec elements"
+  required    : true
+  fallback    : none
+
+EXPECTS CRUDTools:
+  from        : nlspec/bootstrap
+  type        : SEED_DATA
+  description : "Base 8 MCP tools that this spec extends"
+  required    : true
+  fallback    : none
+
+### CONFLICT RESOLUTION
+
+Standard rules from NLSPEC-TEMPLATE Section 16 apply.
+```
 
 ---
 

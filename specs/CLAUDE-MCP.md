@@ -50,6 +50,8 @@ nlspec_split        Analyze and decompose a monolith spec
 nlspec_patch_create Create a tracked patch for a spec
 nlspec_patch_list   List patches with filters
 nlspec_patch_absorb Merge a patch back into the main spec
+nlspec_seed_resolve Walk dependency graph, resolve contracts, produce seed manifest
+nlspec_seed_audit   Trace provenance of a specific seed rule
 ```
 
 All tools accept an optional `namespace` parameter. When omitted, queries
@@ -72,7 +74,7 @@ Process:
   1. Call nlspec_validate to get current integrity status
   2. Call nlspec_list to survey all elements
   3. Analyze for completeness and consistency:
-     a. Are all 15 sections present?
+     a. Are all 16 sections present?
      b. Call nlspec_search({element_type: "FUNCTION"}) — do all have USES and THROWS?
      c. Call nlspec_search({element_type: "RECORD"}) — do all have USED BY?
      d. Call nlspec_search({element_type: "SCENARIO"}) — do all have [SEC:] tags?
@@ -94,13 +96,27 @@ IMPORTANT:
   - When adding RECORDs, always add USED BY references.
   - When adding SCENARIOs, always add [SEC:] tags and a tier ([SMOKE], [AFFECTED], [FULL]).
   - Use nlspec_graph to understand impact before suggesting changes to shared elements.
+
+DEPENDENCY CONTRACT RULES (for specs with IMPORTS or EXPORTS):
+  - When modifying Section 16 EXPORTS, call nlspec_graph({direction: "incoming"})
+    to find every spec that imports from this one. Changing an override=NEVER
+    export can break every downstream consumer. Report the blast radius before
+    proposing the change.
+  - When adding new EXPECTS, call nlspec_get on the dependency's Section 16
+    to verify it actually exports a matching contract.
+  - When reviewing a spec for completeness, also check Section 16:
+    g. Does every IMPORT have a corresponding EXPECTS declaration?
+    h. Are all EXPORTS grounded in real sections (source_ref points to existing content)?
+    i. Are override levels appropriate (NEVER for safety, WITH_JUSTIFICATION for policies)?
+    j. Call nlspec_seed_resolve with dry_run=true to verify the full contract chain resolves.
 ```
 
 ### MODE: DESCRIBE
 
 ```
 Trigger:  "describe", "explain", "walk me through", "what does", "how does",
-          "summarize", "overview", "tell me about", "onboard me"
+          "summarize", "overview", "tell me about", "onboard me",
+          "what depends on", "what does this export", "trace the dependencies"
 Input:    A spec (or specific section/element) identified by namespace/spec_id
 Output:   Human-readable explanation. No modifications to anything.
 Process:
@@ -124,6 +140,24 @@ Process:
      - Dependency graphs from nlspec_graph
      - Element inventories from nlspec_list
      - Coverage reports from nlspec_validate
+  5. For dependency chain questions:
+     - "What does this spec depend on?" → call nlspec_graph to get the full
+       dependency tree. For each dependency, read its Section 16 EXPORTS and
+       explain what contracts flow into this spec.
+     - "What does this spec export?" → call nlspec_get({section: "16"}) and
+       explain each EXPORT in plain language: what it constrains, what type
+       (CONSTRAINT/INVARIANT/SEED_DATA/POLICY), who it affects, override level.
+     - "What would this system boot with?" → call nlspec_seed_resolve with
+       dry_run=true. Walk through each seed rule in the manifest, explaining
+       its provenance (rule → export → spec → section) in human terms.
+     - "Where does this constraint come from?" → call nlspec_seed_audit for
+       the specific rule. Trace the full chain back to the originating spec.
+     - "What breaks if I change this export?" → call nlspec_graph with
+       direction=incoming on the export's spec to find all consumers. List
+       every spec that depends on this contract and what they EXPECT from it.
+     - "Show me the full dependency graph" → call nlspec_graph for the entry
+       spec and render as mermaid diagram showing specs, imports, and exported
+       contract types.
 
 IMPORTANT:
   - In DESCRIBE mode you are READ-ONLY. Do not modify any specs or files.
@@ -132,6 +166,8 @@ IMPORTANT:
   - If you spot something clearly broken (e.g., dangling reference), you may
     mention it briefly, but do not derail into SPEC mode.
   - This mode is for understanding, not editing.
+  - When describing dependencies, use nlspec_get to read actual imported specs.
+    Do NOT guess at what an imported spec contains.
 ```
 
 ### MODE: IMPLEMENT
@@ -151,7 +187,29 @@ Process:
   8. Write tests for ALL Section 10 scenarios — call nlspec_list({element_type: "SCENARIO"})
   9. Run all tests. Fix until ALL pass.
   10. Implement Section 14 (Build and Run) — verify build commands work
+  11. If spec has IMPORTS, call nlspec_seed_resolve to validate dependency
+      contracts (Section 16) — all EXPECTS must be satisfied by EXPORTS.
 Validation: ALL scenarios pass. No exceptions.
+
+DEPENDENCY BOUNDARY RULES (critical for multi-spec projects):
+  - When you encounter an IMPORT, call nlspec_get on the referenced section
+    from the imported spec. Implement against the interface contract — not an
+    invented implementation.
+  - Do NOT hallucinate implementations for imported components. If the spec
+    says "IMPORT Token FROM auth-spec Section 4.1", use that RECORD definition
+    exactly. Do not invent fields, methods, or behaviors.
+  - Do NOT fill gaps in imported contracts with assumptions. If the exported
+    interface is insufficient to implement against, STOP and report:
+    "Section X.X requires {what} from {spec}, but the contract does not
+    specify {what's missing}."
+  - Before implementing, call nlspec_seed_resolve to generate the seed manifest.
+    The manifest contains resolved constraints, invariants, policies, and initial
+    data from all dependencies. These are non-negotiable — implement against them.
+  - Call nlspec_seed_audit for any constraint you're unsure about to trace its
+    provenance back to the originating spec and section.
+  - Treat imported definitions as READ-ONLY. Never modify another spec's
+    RECORDs, FUNCTIONs, or contracts. If a change is needed, create a patch
+    against the source spec: nlspec_patch_create({namespace: ..., spec_id: ...})
 ```
 
 ### MODE: FIX
@@ -176,6 +234,18 @@ Process:
   8. If all pass, you're done
   9. If SMOKE fails, something fundamental broke — stop and report
 Validation: Failing scenario now passes. SMOKE scenarios still pass.
+
+DEPENDENCY CONSTRAINT RULES (for specs with IMPORTS):
+  - Before finalizing a fix, verify it does not violate any dependency contract.
+    Call nlspec_seed_resolve with dry_run=true or check the existing seed manifest.
+  - If the fix requires changing an imported RECORD's usage or violating a
+    constraint from a dependency, STOP and report: "This fix would violate
+    {constraint} from {spec}. The constraint has override={level}."
+  - Call nlspec_seed_audit on any constraint you're unsure about to trace its
+    origin before deciding whether the fix is valid.
+  - Do NOT work around dependency constraints. If the constraint is wrong,
+    the dependency spec needs to change — file a patch against that spec:
+    nlspec_patch_create({namespace: ..., spec_id: ...})
 ```
 
 ### MODE: VALIDATE
@@ -183,13 +253,23 @@ Validation: Failing scenario now passes. SMOKE scenarios still pass.
 ```
 Trigger:  "validate", "test", "verify", "check", "nightly"
 Input:    Nothing new
-Output:   Test results report + spec integrity check
+Output:   Test results report + spec integrity check + dependency contract status
 Process:
   1. Call nlspec_validate to check spec structural integrity
   2. Run ALL scenario tests (full suite)
   3. Report: which pass, which fail, performance numbers
   4. Report: any validation warnings (orphaned records, untested sections)
-  5. Do NOT fix anything — just report
+  5. If spec has IMPORTS, call nlspec_seed_resolve with dry_run=true:
+     a. Are all EXPECTS satisfied by dependency EXPORTS?
+     b. Are there any unresolved conflicts?
+     c. Is the seed manifest stale (specs changed since last resolve)?
+  6. Verify the implementation honors all seed rules:
+     a. Are CONSTRAINT rules respected in the code?
+     b. Are INVARIANT rules continuously true at runtime?
+     c. Were SEED_DATA rules applied during initialization?
+     d. Are POLICY defaults in effect unless explicitly overridden?
+  7. Report any contract violations alongside test results
+  8. Do NOT fix anything — just report
 Validation: Report only. Human decides next action.
 ```
 
@@ -205,10 +285,16 @@ Process:
   3. Compare current code against updated spec
   4. Refactor where spec has changed
   5. Remove any workarounds that patches introduced
-  6. Run ALL scenario tests
-  7. Call nlspec_validate to verify spec integrity
-  8. Clean up: remove dead code, align naming, update comments
-Validation: ALL scenarios pass. Spec validates clean. Code aligned.
+  6. If spec has IMPORTS, re-validate dependency contracts:
+     a. Call nlspec_seed_resolve to regenerate the seed manifest
+     b. Have any dependency EXPORTS changed since the last manifest?
+     c. Do absorbed patches introduce new EXPECTS that need matching?
+     d. Verify the consolidated code honors all updated seed rules
+  7. Run ALL scenario tests
+  8. Call nlspec_validate to verify spec integrity
+  9. Clean up: remove dead code, align naming, update comments
+Validation: ALL scenarios pass. Seed manifest is current. Spec validates clean.
+Code aligned with consolidated spec and all dependency contracts.
 ```
 
 ---
