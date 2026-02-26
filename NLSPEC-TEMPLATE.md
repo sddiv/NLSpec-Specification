@@ -1690,6 +1690,27 @@ EXPECTS {ExpectName}:
   fallback    : {default value if required=false and no dependency provides it}
 ```
 
+**Variant — EXPECTS ONE OF:** When a spec requires one of several alternatives (not a
+specific dependency), use the `EXPECTS ONE OF` form. This declares that the spec needs
+at least one provider from a set of options, with an optional default preference.
+
+```
+EXPECTS ONE OF {ExpectName} FROM {spec_id or "ANY_DEPENDENCY"}:
+  type        : CONSTRAINT | INVARIANT | SEED_DATA | POLICY
+  description : {what this spec needs, listing the alternatives and their trade-offs}
+  required    : true | false
+  default     : {recommended option if no explicit selection is made}
+  fallback    : {behavior if required=false and no option is available}
+```
+
+Use `EXPECTS ONE OF` when:
+- Multiple implementations satisfy the same contract (e.g., transport layers, storage backends)
+- The spec is deliberately transport/implementation-agnostic
+- The deployer should choose based on their environment
+
+The seed resolver treats `EXPECTS ONE OF` as satisfied when **at least one** of the listed
+options is available. If none are available and `required: true`, the build fails.
+
 ### Contracts.3 Conflict Resolution
 
 When multiple dependencies export constraints that affect the same target:
