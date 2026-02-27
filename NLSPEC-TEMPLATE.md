@@ -85,12 +85,14 @@ SECTIONS:
   API             — external interface (endpoints, CLI, MCP tools)
   Errors          — error taxonomy with codes, severity, handling
   Config          — configuration knobs with types, defaults, validation
+  SystemManifest  — platform composition, hardware, kernels, environment configs
   Deployment      — containers, manifests, pipelines, CI/CD
   Scenarios       — behavioral validation (the holdout set)
   Dependencies    — external systems, libraries, and asset packs with pinned versions
   FileStructure   — expected directory layout
   Maintenance     — bug workflow, patches, scenario tiers, versioning
   BuildAndRun     — exact commands to build, test, run, verify, and artifact manifest
+  AgentPipeline   — AI agent execution protocol (provision → build → deploy → validate)
   Boundaries      — explicit non-goals
   Contracts       — exports, expects, conflict resolution
 ```
@@ -633,6 +635,95 @@ CONFIG server:
     description: Maximum GPU memory for catalog index
     validation: must be > 512
 ```
+
+---
+
+## SystemManifest
+
+**Platform composition, hardware requirements, kernel declarations, and environment
+configurations for systems that deploy ON a platform.** Skip this section for standalone
+systems that don't run on a platform (e.g., a library or CLI tool). Include it when the
+system deploys as an application on an infrastructure platform (e.g., a CRA application
+deploying on the CRA platform, a microservice on Kubernetes, or an edge application on
+specific hardware).
+
+The SystemManifest bridges the gap between "what this system does" (the rest of the spec)
+and "what it needs to run" (hardware, platform services, runtime configuration). For
+systems that use an external manifest file (TOML, YAML), this section declares the
+manifest location and summarizes its contents. For simpler systems, declare inline.
+
+### When to Use an External Manifest File
+
+Use an external manifest file when:
+- The system deploys in multiple environments (dev, staging, production)
+- Hardware and kernel declarations are complex enough to warrant machine-parseable format
+- Multiple specs share a manifest template
+
+Use inline SystemManifest when:
+- The system has a single deployment target
+- Hardware requirements are simple (e.g., "any Linux x86_64, 2GB RAM")
+
+### External Manifest Reference
+
+```
+SYSTEM MANIFEST: {manifest-filename.toml}
+  template    : {path to manifest template}
+  scope       : deployment and infrastructure configuration
+```
+
+The agent reads the referenced manifest file for hardware, kernel, and environment
+details. All `SystemManifest.X` references in Deployment, BuildAndRun, and other
+sections refer to the corresponding sections of that manifest instance.
+
+### Inline SystemManifest
+
+For simpler systems, declare the manifest inline:
+
+```
+SYSTEM MANIFEST (inline):
+
+  COMPOSITION:
+    profile       : {composition profile name — e.g., "FULL_CRA", "REFLEX_ONLY", "standalone"}
+    platform      : {platform name and version — e.g., "CRA v0.1", "Kubernetes 1.28", "bare metal"}
+    deployment_mode: {loop-integrated | boundary-only | either}
+
+  HARDWARE:
+    cpu           : {minimum cores}
+    ram           : {minimum GB}
+    gpu           : {required | optional | none} — {type if required}
+    storage       : {minimum GB, type}
+    architecture  : {x86_64 | aarch64 | any}
+    network       : {requirements — e.g., "local-only", "internet required", "air-gapped"}
+
+  KERNELS:
+    {kernel_name}:
+      type        : {safety | governance | domain | privacy | compliance}
+      description : {one-line purpose}
+      enforcement : {IP1 | IP2 | IP3 | all}
+
+  ENVIRONMENT:
+    {env_name} (e.g., development):
+      {key}       : {value or description}
+    {env_name} (e.g., production):
+      {key}       : {value or description}
+
+  SERVICE_INTEGRATION:
+    {service_name}:
+      type        : {database | message-queue | external-api | local-service}
+      required    : {true | false}
+      connection  : {how to connect — URL template, socket path, etc.}
+```
+
+### Rules
+
+- If the spec declares `SYSTEM MANIFEST: {file}`, the agent reads that file for
+  hardware and kernel details. The agent does NOT guess hardware requirements.
+- Kernel names declared here must match kernel definitions in the DataModel and
+  Functions sections. If a kernel is listed in the manifest but not defined in the
+  spec, the agent reports a SPEC_GAP.
+- Environment configurations in the manifest override Config section defaults for
+  that environment. The Config section defines the knobs; the manifest sets the
+  values per environment.
 
 ---
 
@@ -1613,6 +1704,120 @@ ARTIFACT api-schema:
   `EXPECTS ServerBinary FROM kv-store-spec.md` means the dependency must produce
   that artifact before this spec can be implemented.
 ```
+
+---
+
+## AgentPipeline
+
+**Step-by-step execution protocol for an AI agent to autonomously provision, build,
+deploy, test, and validate this system.** This section is optional — skip it for specs
+where the Deployment and BuildAndRun sections provide sufficient instruction. Include
+it when the agent needs a structured pipeline with explicit phases, acceptance criteria,
+and rollback procedures.
+
+The AgentPipeline does NOT duplicate Deployment or BuildAndRun content. It references
+those sections and adds orchestration: the order of operations, what to verify between
+steps, when to abort, and how to report results.
+
+### When to Include This Section
+
+Include AgentPipeline when:
+- The system has complex deployment dependencies (multiple services, databases, platform
+  services that must start in order)
+- The agent needs to provision infrastructure before building
+- There are acceptance criteria beyond "tests pass" (e.g., kernel activation, health
+  endpoint verification, compliance checks)
+- The system deploys on a platform that has its own setup requirements
+
+Skip AgentPipeline when:
+- `cargo build && cargo test && cargo run` is sufficient
+- The system is a library with no deployment
+- Deployment is a single `docker run` or `kubectl apply`
+
+### Pipeline Structure
+
+The pipeline is a sequence of phases. Each phase has actions, verification steps, and
+abort conditions. The agent executes phases in order, verifying each before proceeding.
+
+```
+AGENT PIPELINE:
+
+  PHASE 1: PROVISION
+    description : {what infrastructure to set up}
+    actions:
+      1. {action — e.g., "Deploy PostgreSQL per Deployment.3"}
+      2. {action}
+    verify:
+      - {check — e.g., "pg_isready returns success"}
+      - {check}
+    abort_if    : {condition — e.g., "database unreachable after 3 retries"}
+
+  PHASE 2: BUILD
+    description : {what to build}
+    actions:
+      1. {action — e.g., "Execute BuildAndRun.Build commands"}
+      2. {action}
+    verify:
+      - {check — e.g., "All ARTIFACTs from BuildAndRun exist and pass checkable"}
+    abort_if    : {condition}
+
+  PHASE 3: DEPLOY
+    description : {how to deploy}
+    actions:
+      1. {action — e.g., "Follow Deployment.4 deploy order"}
+      2. {action}
+    verify:
+      - {check — e.g., "Health endpoint returns 200 with expected JSON"}
+      - {check — e.g., "All N kernels report ACTIVE status"}
+    abort_if    : {condition}
+
+  PHASE 4: TEST
+    description : {what to test}
+    actions:
+      1. {action — e.g., "Run SMOKE scenarios from Scenarios section"}
+      2. {action — e.g., "Run FULL scenario suite"}
+    verify:
+      - {check — e.g., "All scenarios pass"}
+      - {check — e.g., "No BLOCKING constraint violations in logs"}
+    abort_if    : {condition — e.g., "Any SMOKE scenario fails"}
+
+  PHASE 5: VALIDATE
+    description : {final acceptance criteria}
+    actions:
+      1. {action — e.g., "Verify audit trail completeness"}
+      2. {action — e.g., "Verify compliance markers (FERPA, COPPA, GDPR)"}
+    verify:
+      - {check}
+    abort_if    : {condition}
+
+  PHASE 6: REPORT
+    description : {what to output}
+    actions:
+      1. {action — e.g., "Generate deployment report with artifact checksums"}
+      2. {action — e.g., "Output kernel status summary"}
+    output      : {what the agent produces — e.g., "JSON report at deploy/report.json"}
+```
+
+### Reference to Agent Instructions
+
+For systems that use a shared agent instruction file (e.g., `CLAUDE.md`), this section
+can be a brief reference:
+
+```
+> The AI agent execution pipeline is defined in `{path-to-agent-instructions}`.
+> An agent reads this spec, provisions infrastructure per the SystemManifest,
+> executes Deployment and BuildAndRun commands, and validates against Scenarios.
+```
+
+### Rules
+
+- Each PHASE must have at least one `verify` check. Phases without verification are
+  not phases — they're just commands.
+- The agent must not proceed to the next phase until all `verify` checks pass.
+- `abort_if` is mandatory for phases that can fail in ways that waste downstream effort
+  (e.g., don't build if infrastructure is missing).
+- The pipeline must be idempotent: running it twice should produce the same result
+  (or detect that it's already complete and skip).
 
 ---
 
