@@ -26,6 +26,15 @@ Specs have a TYPE: SYSTEM (running code), PATTERN (reusable blueprint), or ASSET
 (static resources). Check the spec header to determine the type. PATTERN and ASSET
 specs are consumed by SYSTEM specs via "USES PATTERN:" and "USES ASSET:" in Architecture.3.
 
+Specs may also declare a LAYER: 1-Specification, 2-Realization, 3-Configuration, or
+4-UserProfile. When a Layer is declared, the spec participates in the 4-layer composition
+model. Check the LayerContext section for derivation chain, horizontal composition,
+constraint flow, and substitution boundaries. Composition is two-dimensional:
+**vertical** (L1→L2→L3→L4 derivation) and **horizontal** (multiple specs at the same
+layer composing together via COMPOSES WITH). Constraints flow downward by default,
+upward when user preferences are non-negotiable, and laterally between horizontally
+composed peers. Specs without a Layer declaration are standalone.
+
 ---
 
 ## Spec Tolerance
@@ -91,6 +100,8 @@ nlspec_patch_list   List patches with filters
 nlspec_patch_absorb Merge a patch back into the main spec
 nlspec_seed_resolve Walk dependency graph, resolve contracts, produce seed manifest
 nlspec_seed_audit   Trace provenance of a specific seed rule
+nlspec_layer_stack  Get the full layer composition tree for a spec
+nlspec_layer_validate Validate cross-layer constraint flow (downward + upward)
 ```
 
 All tools accept an optional `namespace` parameter. When omitted, queries
@@ -319,6 +330,27 @@ DEPENDENCY BOUNDARY RULES:
     The resolved constraints are non-negotiable.
   - Call nlspec_seed_audit for any constraint you're unsure about.
   - Treat imported definitions as READ-ONLY.
+
+LAYER COMPOSITION RULES (when spec declares a Layer):
+  - Call nlspec_layer_stack to get the full derivation tree (vertical + horizontal).
+  - Call nlspec_get({section: "LayerContext"}) FIRST. It tells you: what this spec
+    derives from and composes with (LayerContext.1), the full stack (LayerContext.2),
+    and constraint flow (LayerContext.3).
+  - If DERIVES FROM declares a parent spec, call nlspec_get on the parent's Contracts
+    section EXPORTS. Every inherited EXPORT is a constraint you MUST satisfy — treat
+    inherited EXPORTS marked override=NEVER as immutable invariants.
+  - If COMPOSES WITH declares horizontal peers, call nlspec_get on each peer's EXPORTS.
+    Verify that every `depends_on` is satisfied. Treat co-required peers as mandatory.
+  - Follow cross-layer references [Ln:spec-id:Section.x] via nlspec_get to trace
+    constraints back to their source layer. Validate implementation honors constraints
+    from every layer in the derivation chain.
+  - For UPWARD constraint flow: call nlspec_layer_validate to check upward exports
+    against the parent layer. If the parent constraint is override=NEVER, report a
+    conflict — do not silently violate it.
+  - For LATERAL constraint flow: call nlspec_layer_validate to check interface contracts
+    between composing peers. Both sides must agree on the exported contract.
+  - Substitution boundary (LayerContext.4): your implementation must be swappable at
+    this layer without breaking specs above, below, or beside (lateral peers).
 ```
 
 ### MODE: FIX
@@ -636,6 +668,24 @@ Smoke tests:      smoke_{NNN}_{short_name}.{ext}
 
 ---
 
+## Cross-Layer References
+
+When a spec declares a Layer, it may contain cross-layer references:
+```
+[Ln:{spec-id}:{Section}.{subsection}]
+```
+
+When you encounter a cross-layer reference:
+1. Use nlspec_get with the referenced spec-id and section to read the source element
+2. If the referenced spec is marked `(planned)` in the LAYER STACK, note it as
+   unresolvable — do not block on it
+3. Cross-layer references are traceability markers. Follow them during validation to
+   ensure your implementation honors constraints from every layer in the derivation chain.
+4. Use nlspec_layer_stack to see the full tree of related specs across layers
+5. Use nlspec_layer_validate to check that constraint flow is consistent across layers
+
+---
+
 ## Working with Multiple Specs (Phase 2+)
 
 When the project has multiple specs in namespaces:
@@ -657,6 +707,14 @@ RULE: Before making changes to a shared RECORD, check impact:
 
 RULE: After any structural change, validate:
   nlspec_validate({namespace: "myproject", spec_id: "auth"})
+
+RULE: For layered specs, use nlspec_layer_stack to understand derivation:
+  nlspec_layer_stack({namespace: "myproject", spec_id: "auth"})
+  → Returns the full L1→L2→L3→L4 tree with all related specs.
+
+RULE: Before modifying exports in a layered spec, check cross-layer impact:
+  nlspec_layer_validate({namespace: "myproject", spec_id: "auth"})
+  → Validates constraint flow in both directions across the derivation chain.
 ```
 
 ---

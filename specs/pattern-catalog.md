@@ -200,6 +200,28 @@ PATTERN: ConsistentHashing
 
 ---
 
+## Composition Patterns
+
+```
+PATTERN: LayerComposition
+  level       : composition
+  description : Decompose a system into 4 layers: Specification → Realization →
+                Configuration → User Profile. Each layer is a clean substitution
+                boundary. One L1 spec produces many L2 realizations, each L2
+                supports many L3 configurations, each L3 serves many L4 profiles.
+  when        : Multi-platform products, configurable systems, multi-tenant with
+                per-user preferences, systems that need clean technology migration paths
+  constraints : Each layer must define DERIVES FROM (parent), LAYER STACK (tree),
+                CONSTRAINT FLOW (downward + optional upward), and SUBSTITUTION
+                BOUNDARY (what's swappable). Constraints flow downward by default.
+                Upward flow requires explicit declaration and is blocked by NEVER overrides.
+  variants    : Full 4-layer (spec→realize→configure→profile),
+                3-layer (spec→realize→configure, no per-user profiles),
+                2-layer (spec→realize, no configuration layer)
+```
+
+---
+
 ## How to Add Patterns
 
 **Prior art:** Add an entry to this catalog with name, level, description, when/constraints.

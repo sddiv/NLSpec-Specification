@@ -524,3 +524,49 @@ The template remains the format at every phase. Complex projects have
 multiple spec files forming a dependency graph, each following the same template
 scoped to its concerns. The tooling grows with you — Phase 0 requires no tooling
 at all.
+
+---
+
+## Layer Composition — The 4-Layer Model
+
+Orthogonal to the phase system, specs can participate in a **4-layer composition
+model** where one specification produces many realizations, each realization supports
+many configurations, and each configuration serves many user profiles.
+
+| Layer | Name | What It Defines |
+|-------|------|-----------------|
+| 1 | Specification | Contracts, interfaces, invariants — the possibility space |
+| 2 | Realization | Platform-specific concretization of an L1 spec |
+| 3 | Configuration | Domain or deployment tuning of an L2 realization |
+| 4 | User Profile | Personalization constraints on an L3 configuration |
+
+Layer composition is **opt-in** and **two-dimensional**. A spec declares its layer in
+the header (`Layer:` field) and uses the `LayerContext` section to define:
+
+- **Derivation + Horizontal Composition** (LayerContext.1) — which spec at the layer
+  below this one derives from (vertical), and which specs at the same layer it composes
+  with (horizontal). An OS realization is not one spec — it's kernel + filesystem +
+  networking, all at L2, with COMPOSES WITH declarations defining their interfaces.
+- **Layer Stack** (LayerContext.2) — the full tree of specs across all four layers,
+  showing both vertical derivation and horizontal composition at each layer
+- **Constraint Flow** (LayerContext.3) — how constraints propagate downward (default),
+  optionally upward (when user preferences are non-negotiable), and laterally (between
+  horizontally composed peers at the same layer)
+- **Substitution Boundaries** (LayerContext.4) — what can be swapped at this layer
+  without affecting other layers or horizontal peers
+- **Cross-Layer References** (LayerContext.5) — `[Ln:spec-id:Section.x]` syntax for
+  tracing constraints back to their source layer
+
+Each layer is a clean substitution boundary. You swap an L2 realization (e.g., React →
+native iOS) without changing the L1 spec above or the L3 configurations below. Within
+a layer, you swap an optional horizontal component (e.g., GPU driver) without
+disturbing co-required peers (kernel, filesystem). You swap an L4 user profile without
+touching the L3 configuration it personalizes.
+
+The layer model works at any phase. A Phase 0 project can declare Layer: 1-Specification
+on a single spec file and later add L2/L3/L4 specs as the system grows. A Phase 2+
+project with namespaces gains cross-layer validation via the MCP server's graph operations.
+
+Specs without a Layer declaration are standalone — they work exactly as before. The
+layer model adds composition semantics on top of the existing template, phases, and
+tooling without changing them.

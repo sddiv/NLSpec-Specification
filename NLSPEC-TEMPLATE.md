@@ -6,6 +6,22 @@
 > **Type:** {SYSTEM | PATTERN | ASSET}
 > **Language Target:** {Rust | Go | TypeScript | Python | Language-Agnostic}
 > **Status:** {Draft | Review | Approved | Implementing | Complete}
+> **Layer:** {1-Specification | 2-Realization | 3-Configuration | 4-UserProfile | —}
+
+The **Layer** field is optional. Omit it (or set to `—`) for specs that are not part of a
+layered composition. When present, it declares where this spec sits in the 4-layer
+composition model:
+
+| Layer | Name | What It Defines |
+|-------|------|-----------------|
+| 1 | Specification | Contracts, interfaces, invariants, pluggable boundaries. Defines the possibility space. |
+| 2 | Realization | Makes Layer 1 concrete for a specific platform or technology. Derives from an L1 spec. |
+| 3 | Configuration | Tunes a Layer 2 realization for a specific domain or deployment. Derives from an L2 spec. |
+| 4 | User Profile | Preferences, overrides, personalization constraints. Derives from an L3 spec. |
+
+Each layer derives from the layer below it and adds its own constraints. A spec at any
+layer uses the same template — the layer declaration affects how agents interpret
+derivation, contracts, and constraint flow, not which sections are available.
 
 ---
 
@@ -95,6 +111,7 @@ SECTIONS:
   AgentPipeline   — AI agent execution protocol (provision → build → deploy → validate)
   Boundaries      — explicit non-goals
   Contracts       — exports, expects, conflict resolution
+  LayerContext    — (optional) layer composition: derivation, stack, constraint flow
 ```
 
 **Recommended sections for TYPE: PATTERN:**
@@ -109,6 +126,7 @@ SECTIONS:
   Scenarios       — constraint validation (not end-to-end system tests)
   Boundaries      — what this pattern does not cover
   Contracts       — architectural constraints exported to consumers
+  LayerContext    — (optional) layer composition: which layers this pattern applies to
 ```
 
 **Recommended sections for TYPE: ASSET:**
@@ -121,6 +139,7 @@ SECTIONS:
   StyleGuide      — RULEs and TOKENs (design constraints, typography, spacing)
   Boundaries      — what this asset does not cover
   Contracts       — design constraints exported to consumers
+  LayerContext    — (optional) layer composition: which layers these assets serve
 ```
 
 **Rules:**
@@ -128,6 +147,9 @@ SECTIONS:
   `[SEC:]` tags that reference it.
 - Subsections use `{SectionName}.{number}`: `Functions.1`, `Architecture.2`.
 - Tags reference sections by name: `[SEC:Functions.1]`, `[SEC:Scenarios]`.
+- Cross-layer references use `[Ln:{spec-id}:{Section}.{subsection}]` to point to
+  elements in specs at other layers. Example: `[L1:product-spec:Functions.3]`.
+  See LayerContext.5 for full syntax and rules.
 - Custom sections are allowed. Add them to the SECTIONS block. The agent treats
   them like any other section.
 - The SECTIONS block, when present, is the first thing the agent reads. It
@@ -1925,12 +1947,454 @@ When multiple dependencies export constraints that affect the same target:
 3. Spec closer to the dependency root (fewer hops) wins.
 4. If still ambiguous, the build fails with a clear error.
 
-### Contracts.4 Notes for Spec Authors
+### Contracts.4 Layer-Aware Contracts
+
+**When this spec declares a Layer (header), EXPORTS and EXPECTS gain layer semantics.**
+Omit this subsection entirely for specs without a Layer declaration.
+
+Layer-aware exports declare **which layer** the constraint targets and **which direction**
+it flows:
+
+```
+EXPORT {ExportName}:
+  type        : CONSTRAINT | INVARIANT | SEED_DATA | POLICY
+  target      : {component/layer in the consumer}
+  layer_target: {L2 | L3 | L4 | "derived" | "lateral" — which layer receives this export}
+  direction   : DOWNWARD | UPWARD | LATERAL
+  condition   : {when this export applies}
+  value       : {the constraint or rule}
+  override    : NEVER | WITH_JUSTIFICATION | UNRESTRICTED
+  source_ref  : [SEC:SectionName.x]
+```
+
+**DOWNWARD exports** (default) flow from a spec to specs that derive from it:
+```
+EXPORT SearchInterface:
+  type        : INVARIANT
+  target      : search subsystem
+  layer_target: derived
+  direction   : DOWNWARD
+  condition   : ALWAYS
+  value       : "All search implementations must return results within 50ms p99"
+  override    : NEVER
+  source_ref  : [SEC:Functions.3]
+```
+
+**UPWARD exports** propagate preferences or constraints from a lower layer to the
+layer it derives from. These represent the "constraint flow inversion" — the user or
+configuration defining ground truth that the realization must accommodate:
+```
+EXPORT ThoroughnessPreference:
+  type        : CONSTRAINT
+  target      : processing pipeline
+  layer_target: L3
+  direction   : UPWARD
+  condition   : "when user selects thoroughness-first mode"
+  value       : "enable async deep-scan pipeline; disable streaming partial results"
+  override    : WITH_JUSTIFICATION
+  source_ref  : [SEC:Config.2]
+```
+
+**LATERAL exports** flow between horizontally composed specs at the same layer.
+These are the interface contracts that composing peers depend on:
+```
+EXPORT BlockDeviceInterface:
+  type        : INVARIANT
+  target      : filesystem subsystem
+  layer_target: lateral
+  direction   : LATERAL
+  condition   : ALWAYS
+  value       : "block read/write via struct bio; minimum 512-byte sector alignment"
+  override    : NEVER
+  source_ref  : [SEC:API.1]
+```
+
+**Layer-aware EXPECTS** declare what a spec needs from a specific layer:
+```
+EXPECTS {ExpectName}:
+  from        : {spec_id}
+  from_layer  : {L1 | L2 | L3 | L4 — which layer provides this}
+  type        : CONSTRAINT | INVARIANT | SEED_DATA | POLICY
+  description : {what this spec needs}
+  required    : true | false
+  fallback    : {default if not provided}
+```
+
+**Derivation inheritance rule:** When a spec at Layer N+1 derives from a spec at Layer N,
+it automatically inherits all of the parent's DOWNWARD EXPORTS as constraints it must
+satisfy. These inherited constraints do not need to be re-declared as EXPECTS — they
+are implicit. The agent validates them during implementation.
+
+**Upward propagation rule:** When a spec at Layer N+1 declares an UPWARD export, the
+agent traces the derivation chain to Layer N and checks whether the parent can accommodate
+the constraint. If the parent's relevant EXPORT is `override: NEVER`, propagation stops
+with a conflict. If `WITH_JUSTIFICATION`, the agent flags it for human review. If
+`UNRESTRICTED`, the constraint is applied automatically.
+
+### Contracts.5 Notes for Spec Authors
 
 - Every spec that other specs depend on SHOULD define its EXPORTS explicitly.
 - If your spec has no exports, state: `EXPORTS: none — this spec is a leaf.`
 - The seed resolver walks the full dependency graph and collects all exports before
   any code is generated. Conflicts are caught at build time, not runtime.
+- For layered specs: EXPORTS with `layer_target: derived` apply to ALL specs that
+  derive from this one, regardless of which specific layer they're at. Use a specific
+  layer target (`L2`, `L3`, `L4`) when the export applies only at that layer.
+- Upward exports are powerful but should be used sparingly. Most constraints flow
+  downward. Reserve upward exports for genuinely non-negotiable user or domain
+  requirements that the system must accommodate structurally.
+
+---
+
+## LayerContext
+
+**Where this spec sits in a layered composition and how it relates to specs at other
+layers.** This section is optional — omit it entirely for specs that are not part of a
+multi-layer stack. Include it when the header declares a `Layer` value.
+
+The 4-layer composition model lets one specification produce many realizations, each
+realization support many configurations, and each configuration serve many user profiles.
+Each layer is a **clean substitution boundary** — you swap at the level you care about
+without disturbing the layers above or below.
+
+Composition happens in two dimensions. **Vertical** composition is derivation across
+layers (L1→L2→L3→L4). **Horizontal** composition is multiple specs at the same layer
+composing together to form the complete layer — an OS is not one spec, it's kernel +
+filesystem + networking + drivers, all at L2, with defined interfaces between them.
+
+This section declares four things: what this spec derives from, what it composes with
+at the same layer, what the full stack looks like, and how constraints flow.
+
+### LayerContext.1 Derivation
+
+A spec at Layer 2+ **derives from** a spec at the layer below it. Derivation means:
+the derived spec inherits all contracts, invariants, and interface definitions from
+its parent, then adds layer-specific concerns. A derived spec may constrain its parent
+further but may not violate any of the parent's EXPORT constraints marked `override: NEVER`.
+
+```
+DERIVES FROM {parent-spec-id}:
+  layer       : {parent's layer number}
+  spec        : {parent spec filename or namespace/spec-id}
+  inherits    : {what carries forward — "all EXPORTS", "Contracts + DataModel", or specific list}
+  adds        : {one-line summary of what this layer contributes beyond the parent}
+  constrained : {which parent EXPORTS this spec further narrows, or "none"}
+```
+
+**Layer 1 (Specification)** specs do not derive from anything — they are the root.
+Declare: `DERIVES FROM: none — this is a root specification.`
+
+**Layer 2 (Realization)** specs derive from an L1 spec:
+```
+DERIVES FROM product-spec:
+  layer       : 1
+  spec        : product-spec.md
+  inherits    : all EXPORTS (contracts, interfaces, invariants)
+  adds        : platform-specific implementation for React + Rails + Postgres
+  constrained : none — faithful realization of the full L1 contract
+```
+
+**Layer 3 (Configuration)** specs derive from an L2 spec:
+```
+DERIVES FROM product-react-realization:
+  layer       : 2
+  spec        : product-react-spec.md
+  inherits    : all EXPORTS + DataModel + API surface
+  adds        : healthcare domain configuration (HIPAA mode, audit requirements)
+  constrained : DataRetention (narrowed from 90d to 7y per HIPAA)
+```
+
+**Layer 4 (User Profile)** specs derive from an L3 spec:
+```
+DERIVES FROM product-healthcare-config:
+  layer       : 3
+  spec        : product-healthcare-config.md
+  inherits    : all EXPORTS + Config surface
+  adds        : radiologist workflow preferences (thoroughness-first, image-heavy layout)
+  constrained : UILayout (overrides default grid with radiology-optimized panels)
+```
+
+#### Horizontal Composition — COMPOSES WITH
+
+A single layer often requires multiple specs that compose together horizontally.
+Each spec in the composition owns a distinct concern but they share a layer, derive
+from the same parent(s), and define interfaces between each other. Horizontal
+composition uses the existing IMPORT/EXPORT mechanism — composing specs at the same
+layer are peers that export contracts to and import from each other.
+
+```
+COMPOSES WITH:
+  {peer-spec-id}:
+    spec        : {peer spec filename or namespace/spec-id}
+    interface   : {what this spec exposes to the peer — e.g., "syscall ABI", "event bus API"}
+    depends_on  : {what this spec needs from the peer — e.g., "block device interface", "none"}
+    relationship: {co-required | optional | alternative}
+```
+
+**Relationship types:**
+- `co-required` — both specs must be present for the layer to be complete. Neither
+  works without the other (e.g., kernel + filesystem in an OS).
+- `optional` — the peer adds capability but the layer functions without it (e.g.,
+  GPU driver in an OS that can run headless).
+- `alternative` — the peer is an alternative implementation of the same concern.
+  Only one of the alternatives is used at a time (e.g., ext4-spec vs btrfs-spec
+  for the filesystem concern).
+
+Example — an OS realization composed of multiple specs:
+```
+DERIVES FROM os-spec:
+  layer       : 1
+  spec        : os-spec.md
+  inherits    : all EXPORTS (POSIX interface contracts, security invariants)
+  adds        : Linux kernel implementation for arm64
+  constrained : none
+
+COMPOSES WITH:
+  filesystem-ext4:
+    spec        : filesystem-ext4-spec.md
+    interface   : VFS layer (struct file_operations, struct inode_operations)
+    depends_on  : block device interface from this spec
+    relationship: co-required
+
+  networking-stack:
+    spec        : networking-spec.md
+    interface   : socket API (AF_INET, AF_UNIX)
+    depends_on  : memory management, interrupt handling from this spec
+    relationship: co-required
+
+  gpu-driver:
+    spec        : gpu-driver-spec.md
+    interface   : DRM/KMS interface
+    depends_on  : PCI subsystem, memory management from this spec
+    relationship: optional
+```
+
+**Rules for horizontal composition:**
+- All specs in a horizontal composition MUST share the same Layer number and the
+  same DERIVES FROM parent (or set of parents).
+- Interface contracts between composing specs use the standard IMPORT/EXPORT mechanism.
+  There is no special "lateral export" — a composing spec exports to its peers the
+  same way it exports to any consumer.
+- The seed resolver treats horizontally composed specs as a single resolution unit
+  at their layer. All must be resolved together — a conflict between composing specs
+  fails the build for the entire layer.
+- When validating, the agent must check that every `depends_on` is satisfied by an
+  EXPORT from the referenced peer spec. Missing dependencies are SPEC_GAPs.
+- `alternative` specs are mutually exclusive. The seed resolver selects one based on
+  configuration or fails if the selection is ambiguous.
+
+### LayerContext.2 Layer Stack
+
+**The full composition stack this spec participates in.** This gives the agent context
+about the entire derivation chain — from the root specification down to the user profile.
+Not every layer in the stack needs to exist yet. Mark unwritten layers as `(planned)`.
+
+```
+LAYER STACK:
+
+  L1  {spec-id}                     — {one-line purpose}
+   │
+   └─ L2  {spec-id}                 — {one-line purpose}
+      ├── L2  {spec-id}             — {horizontal peer, co-required}
+      ├── L2  {spec-id}             — {horizontal peer, optional}
+       │
+       ├─ L3  {spec-id}             — {one-line purpose}
+       │   │
+       │   ├─ L4  {spec-id}         — {one-line purpose}
+       │   └─ L4  {spec-id}         — {one-line purpose}
+       │
+       └─ L3  {spec-id}             — {one-line purpose}
+           │
+           └─ L4  {spec-id}         — {one-line purpose}
+```
+
+The stack has two dimensions. **Vertically**, one L1 may have many L2 realizations,
+each L2 may have many L3 configurations, each L3 may have many L4 profiles.
+**Horizontally**, each layer may consist of multiple composing specs shown as siblings
+connected by `├──` at the same indentation level. Mark the current spec with
+`← THIS SPEC`. Mark horizontal peers with their relationship type.
+
+Example — vertical-only (simple product):
+```
+LAYER STACK:
+
+  L1  product-spec                   — core product contracts and interfaces
+   │
+   ├─ L2  product-react-spec         — React + Rails + Postgres realization
+   │   │
+   │   ├─ L3  product-healthcare     — HIPAA-compliant healthcare configuration  ← THIS SPEC
+   │   │   │
+   │   │   ├─ L4  radiologist-profile — radiologist workflow preferences
+   │   │   └─ L4  nurse-profile       — nursing station preferences
+   │   │
+   │   └─ L3  product-education      — FERPA-compliant education configuration
+   │       │
+   │       └─ L4  teacher-profile     — teacher dashboard preferences
+   │
+   └─ L2  product-ios-spec           — native iOS realization (planned)
+```
+
+Example — horizontal + vertical (OS with composed subsystems):
+```
+LAYER STACK:
+
+  L1  os-spec                        — POSIX interface contracts, security invariants
+   │
+   └─ L2  kernel-spec                — Linux kernel for arm64  ← THIS SPEC
+      ├── L2  filesystem-ext4-spec   — ext4 filesystem (co-required)
+      ├── L2  networking-spec        — TCP/IP networking stack (co-required)
+      ├── L2  gpu-driver-spec        — GPU/DRM subsystem (optional)
+       │
+       ├─ L3  server-config          — headless server configuration
+       │   │
+       │   └─ L4  db-server-profile  — database server tuning
+       │
+       └─ L3  desktop-config         — desktop workstation configuration
+           │
+           └─ L4  developer-profile  — developer workstation preferences
+```
+
+**Rules:**
+- A spec MUST list at least its own layer, its parent (if any), and its horizontal
+  peers (if any, via COMPOSES WITH).
+- Sibling and child layers are recommended but not required.
+- `(planned)` marks layers that are anticipated but have no spec file yet.
+- Horizontal peers are shown at the same indentation level with `├──` and annotated
+  with their relationship type (co-required, optional, alternative).
+- The agent uses the stack to understand substitution scope: changing an L3 spec
+  affects only the L4 specs beneath it, not sibling L3 specs or the L2 above.
+  Changing a horizontally composed spec affects its co-required peers (they may
+  need re-validation) but not optional or alternative peers.
+
+### LayerContext.3 Constraint Flow
+
+Constraints flow in three directions. **Downward** is the default: each layer constrains
+the layer below it. **Upward** is the inversion described in the composition model:
+a user's preferences propagate up through configuration into realization and
+potentially into the specification itself. **Lateral** is the flow between horizontally
+composed specs at the same layer: peers constrain each other through shared interfaces.
+
+```
+CONSTRAINT FLOW:
+
+  DOWNWARD (default — higher layers constrain lower layers):
+    L1 → L2: {what L1 constraints carry into the realization}
+    L2 → L3: {what L2 constraints carry into the configuration}
+    L3 → L4: {what L3 constraints carry into the user profile}
+
+  UPWARD (inversion — lower layers propagate preferences upward):
+    L4 → L3: {what user preferences the configuration must accommodate}
+    L3 → L2: {what configuration needs require realization changes}
+    L2 → L1: {what realization discoveries require spec changes}
+
+  LATERAL (same-layer — horizontal peers constrain each other):
+    {spec-a} ↔ {spec-b}: {what constraints flow between composing specs}
+```
+
+Not every spec needs all three directions. Many systems use only downward flow.
+Upward flow matters when user preferences are non-negotiable. Lateral flow matters
+when multiple specs compose horizontally at the same layer.
+
+```
+CONSTRAINT FLOW:
+
+  DOWNWARD:
+    L1 → L2: all interface contracts, invariants, data model shapes
+    L2 → L3: API surface, deployment constraints, available feature flags
+    L3 → L4: configurable preference dimensions, allowed override ranges
+
+  UPWARD:
+    L4 → L3: "thoroughness over speed" preference requires async processing mode
+    L3 → L2: async processing mode requires WebSocket realization (not REST-only)
+    L2 → L1: (none — L1 already accommodates both sync and async interfaces)
+
+  LATERAL:
+    kernel ↔ filesystem: kernel provides block device interface, filesystem provides VFS
+    kernel ↔ networking: kernel provides memory management, networking provides socket API
+```
+
+**Rules:**
+- Downward constraints are mandatory. Every derived spec inherits and must satisfy
+  its parent's EXPORTS.
+- Upward constraints are advisory until validated. An L4 preference that would require
+  an L1 change is flagged as a SPEC_GAP, not silently accommodated.
+- When upward flow reaches a constraint marked `override: NEVER`, propagation stops.
+  The agent reports: "User preference X conflicts with L{n} constraint Y (NEVER override).
+  The preference cannot be accommodated without a spec change at L{n}."
+- Lateral constraints between composing specs use the standard IMPORT/EXPORT mechanism.
+  When spec-a declares `depends_on` from spec-b in COMPOSES WITH, spec-b must have a
+  matching EXPORT. The seed resolver validates lateral dependencies as part of the
+  layer's resolution unit.
+- AI validates upward flow by mocking the affected layers: change the L3 config per the
+  L4 preference, validate L3 against L2, validate L2 against L1. If all pass, the
+  preference is safe. If any fail, report the conflict.
+
+### LayerContext.4 Substitution Boundaries
+
+**What can be swapped at this layer without affecting other layers.** This is the core
+property that makes the composition model practical — each layer is an independent
+substitution unit.
+
+```
+SUBSTITUTION BOUNDARY:
+  swappable   : {what can be replaced at this layer — e.g., "entire realization",
+                 "configuration profile", "user preference set"}
+  stable_above: {what the layer above sees that does NOT change when this layer is swapped}
+  stable_below: {what the layer below provides that this layer depends on remaining stable}
+  swap_cost   : {low | medium | high — how much effort to swap this layer}
+  swap_trigger: {when you'd swap — e.g., "new platform", "new domain", "new user type"}
+```
+
+Example for an L2 (Realization) spec:
+```
+SUBSTITUTION BOUNDARY:
+  swappable   : entire technology stack (React→Vue, Rails→Express, Postgres→DynamoDB)
+  stable_above: L1 contracts, interfaces, invariants — unchanged regardless of technology
+  stable_below: (none — L2 is realized against L1, no layer below)
+  swap_cost   : high — full re-materialization, but validated against same L1 spec
+  swap_trigger: platform migration, performance requirements, team expertise change
+```
+
+Example for an L4 (User Profile) spec:
+```
+SUBSTITUTION BOUNDARY:
+  swappable   : all user preferences and layout overrides
+  stable_above: L3 configuration, feature flags, domain constraints — unchanged per user
+  stable_below: (none — L4 is the leaf layer)
+  swap_cost   : low — runtime preference application, no re-materialization
+  swap_trigger: new user, user preference change, accessibility requirement
+```
+
+### LayerContext.5 Cross-Layer References
+
+When a spec needs to reference a specific element in a spec at another layer, use the
+cross-layer reference syntax:
+
+```
+[Ln:{spec-id}:{Section}.{subsection}]
+```
+
+Examples:
+```
+This CONFIG parameter maps to [L1:product-spec:Functions.3] — the search interface
+defined in the root specification.
+
+This SCENARIO validates behavior required by [L2:product-react-spec:API.2] — the
+REST endpoint that this configuration tunes.
+
+The DataRetention override in this profile satisfies [L3:product-healthcare:Config.2]
+— the HIPAA retention policy declared in the healthcare configuration.
+```
+
+**Rules:**
+- Cross-layer references are unidirectional markers, not imports. They say "this
+  element relates to that element at layer N" for traceability.
+- For actual dependency on types or functions from another layer, use the existing
+  IMPORT syntax (Appendix B) with the layer-qualified spec-id.
+- The agent follows cross-layer references during validation: when a referenced
+  element changes, affected scenarios at the referencing layer should be re-run.
+- Cross-layer references to `(planned)` specs are allowed — the agent notes them
+  as unresolvable until the referenced spec exists.
 
 ---
 

@@ -273,6 +273,45 @@ RECORD ValidationWarning:
   USED BY: spec_validator
 ```
 
+```
+RECORD LayerStackEntry:
+  spec_id         : String              -- namespace/spec-id of the spec at this layer
+  layer           : Integer             -- layer number (1-4)
+  layer_name      : String              -- Specification | Realization | Configuration | UserProfile
+  derives_from    : String | None       -- parent spec-id (None for L1)
+  children        : List<String>        -- child spec-ids that derive from this
+  status          : String              -- "exists" | "planned"
+  one_line        : String              -- one-line purpose from the LAYER STACK
+  composes_with   : List<CompositionPeer>  -- horizontal peers at the same layer
+
+  USED BY: build_layer_stack, validate_layer_constraints
+```
+
+```
+RECORD CompositionPeer:
+  spec_id         : String              -- the peer spec's identifier
+  interface       : String              -- what this spec exposes to the peer
+  depends_on      : String              -- what this spec needs from the peer
+  relationship    : String              -- "co-required" | "optional" | "alternative"
+
+  USED BY: build_layer_stack, validate_layer_constraints
+```
+
+```
+RECORD LayerValidationReport:
+  spec_id         : String              -- the spec being validated
+  layer           : Integer             -- its layer number
+  derivation_valid: Boolean             -- DERIVES FROM chain is consistent
+  downward_satisfied: List<String>      -- parent EXPORTS this spec honors
+  downward_violated: List<String>       -- parent EXPORTS this spec violates
+  upward_conflicts: List<String>        -- upward exports that conflict with parent NEVER constraints
+  lateral_issues  : List<String>        -- issues from horizontal peer validation
+  cross_layer_refs: List<String>        -- all [Ln:...] refs and whether they resolve
+  overall         : String              -- PASS | WARN | FAIL
+
+  USED BY: validate_layer_constraints
+```
+
 ### DataModel.2 Additional Enumerations
 
 ```
@@ -557,6 +596,50 @@ FUNCTION spec_split_execute(namespace: String, spec_id: SpecId, clusters: List<S
   - IMPORT declarations are generated with correct section and element references.
   - SCENARIOs that span multiple clusters are copied to ALL relevant new specs
     (with appropriate [SEC:] tag updates).
+```
+
+### Functions.7 Layer Composition
+
+```
+FUNCTION build_layer_stack(spec_id: String, namespace: String) -> List<LayerStackEntry>
+  USES: Spec, SpecMetadata, LayerStackEntry
+  THROWS: SpecNotFound, ParseError
+
+  BEHAVIOR:
+  1. Read the target spec's LayerContext section
+  2. Parse DERIVES FROM to find the parent spec
+  3. Parse LAYER STACK to find siblings and children
+  4. For each referenced spec, check if it exists in the store
+  5. Mark existing specs as "exists", missing ones as "planned"
+  6. When building the layer tree, also collect COMPOSES WITH declarations to populate
+     composes_with on each LayerStackEntry. Horizontal peers share the same layer_number
+     and parent_spec_id.
+  7. Return the full tree as a list of LayerStackEntry, ordered L1→L2→L3→L4
+```
+
+```
+FUNCTION validate_layer_constraints(spec_id: String, namespace: String) -> LayerValidationReport
+  USES: Spec, SpecMetadata, LayerStackEntry, SeedExport, LayerValidationReport
+  THROWS: SpecNotFound, ParseError
+
+  BEHAVIOR:
+  1. Build the layer stack for this spec via build_layer_stack
+  2. Read this spec's DERIVES FROM to identify the parent
+  3. Read the parent's Contracts section EXPORTS
+  4. Check each parent EXPORT with layer_target matching this layer or "derived":
+     a. If override=NEVER: verify this spec does not contradict it → downward_satisfied or downward_violated
+     b. If override=WITH_JUSTIFICATION: check if justification is documented
+  5. Read this spec's Contracts section for UPWARD exports
+  6. For each UPWARD export, trace to the parent and check compatibility:
+     a. If parent has a NEVER constraint on the same target → upward_conflicts
+  7. For LATERAL constraint flow: verify that every depends_on in a COMPOSES WITH
+     declaration is satisfied by an EXPORT from the referenced peer spec. Report
+     unsatisfied lateral dependencies as validation issues.
+  8. For co-required peers: verify all are present. Report missing co-required peers.
+  9. For alternative peers: verify at most one is selected.
+  10. Resolve all [Ln:...] cross-layer references in this spec:
+     a. For each, check if the referenced spec and section exist
+  11. Compute overall: PASS if no violations or conflicts, WARN if only unresolved planned refs, FAIL otherwise
 ```
 
 ---
@@ -917,6 +1000,41 @@ MCP TOOL: nlspec_drift
   - Used automatically during VALIDATE and CONSOLIDATE modes.
 ```
 
+### API.8 Layer Composition
+
+```
+MCP TOOL: nlspec_layer_stack
+  DESCRIPTION: Get the full layer composition tree for a spec
+  INPUT:
+    namespace : String
+    spec_id   : String
+  OUTPUT:
+    stack     : List<LayerStackEntry>   -- full L1→L2→L3→L4 tree
+    this_spec : String                  -- which entry is the queried spec
+  ERRORS:
+    SpecNotFound: spec doesn't exist
+    NotLayered: spec has no Layer declaration
+  NOTES:
+    - Returns the full derivation tree, not just this spec's branch
+    - Specs marked (planned) in the LAYER STACK are included with status "planned"
+```
+
+```
+MCP TOOL: nlspec_layer_validate
+  DESCRIPTION: Validate cross-layer constraint flow for a spec
+  INPUT:
+    namespace : String
+    spec_id   : String
+  OUTPUT:
+    report    : LayerValidationReport
+  ERRORS:
+    SpecNotFound: spec doesn't exist
+    NotLayered: spec has no Layer declaration
+  NOTES:
+    - Checks both downward (inherited) and upward (propagated) constraints
+    - Cross-layer references to planned specs are flagged as WARN, not FAIL
+```
+
 ---
 
 ## Errors
@@ -1270,6 +1388,7 @@ nlspec_validate({namespace: "nlspec", spec_id: "mcp-server"})
 - Enforce specific project structure — namespaces are freeform
 - Require all tools — bootstrap tools work standalone without these extensions
 - Prevent namespace cycles — warns about them, like spec import cycles
+- Cross-layer seed resolution (combining layer constraints with dependency constraints) — future extension via seed-resolver integration
 
 ### Future Extensions (not in this spec):
 - nlspec_describe: MCP App rendering interactive spec overview (dashboard)

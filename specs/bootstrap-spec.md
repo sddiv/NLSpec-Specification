@@ -301,6 +301,7 @@ RECORD SpecMetadata:
   spec_type    : SpecType            -- parsed from "Type:" header, defaults to SYSTEM
   language     : String
   status       : String              -- Draft | Review | Approved | Implementing | Complete
+  layer        : String | None       -- Layer declaration from header (1-Specification, 2-Realization, 3-Configuration, 4-UserProfile, or None)
 
   USED BY: store_load, mcp_init
 ```
@@ -343,6 +344,12 @@ ENUM ElementType:
   TOKEN                              -- design token from ASSET specs (Functions section)
   LOCALE                             -- locale file entry from ASSET specs (FileStructure section)
   STRING_CLASS                       -- string classification from ASSET specs (FileStructure section)
+  DERIVES_FROM                       -- layer derivation declaration
+  COMPOSES_WITH                      -- horizontal composition peer declaration
+  LAYER_STACK                        -- layer composition tree
+  CONSTRAINT_FLOW                    -- constraint flow declaration
+  SUBSTITUTION_BOUNDARY              -- substitution boundary declaration
+  CROSS_LAYER_REF                    -- cross-layer reference [Ln:spec-id:Section.x]
   PROSE                              -- unstructured text
 ```
 
@@ -362,6 +369,7 @@ ENUM ReferenceType:
   TAGGED                             -- scenario tags a section [SEC:x.x]
   APPLIES_PATTERN                    -- component uses a pattern
   APPLIES_ASSET                      -- component uses an asset
+  CROSS_LAYER                        -- cross-layer reference [Ln:spec-id:Section.x]
 ```
 
 ### DataModel.3 Type Aliases
@@ -395,9 +403,13 @@ FUNCTION parse_spec(markdown: String, spec_id: SpecId) -> Spec
   - gaps field contains any detected structural gaps
 
   BEHAVIOR:
-  1. Parse header block (Version, Author, Date, Type, Language, Status) into SpecMetadata.
+  1. Parse header block (Version, Author, Date, Type, Language, Status, Layer) into SpecMetadata.
      Any missing header fields get sensible defaults (Type defaults to SYSTEM,
-     Status defaults to Draft). Do NOT reject specs with incomplete headers.
+     Status defaults to Draft, Layer defaults to None). Do NOT reject specs with incomplete headers.
+     - Parse Layer header field: extract layer number and name from "Layer: {value}" header line
+     - If Layer is present, parse LayerContext section for DERIVES FROM, LAYER STACK, CONSTRAINT FLOW, SUBSTITUTION BOUNDARY blocks
+     - Parse COMPOSES WITH blocks in LayerContext.1: extract peer spec-id, interface, depends_on, and relationship (co-required | optional | alternative)
+     - Extract cross-layer references matching pattern [Ln:{spec-id}:{Section}.{subsection}]
   2. Look for a SECTIONS declaration block. Two paths:
      a. SECTIONS block found → parse the declared section names and order.
         Set section_decl on the Spec. This is the "strict" path.
@@ -1301,6 +1313,8 @@ $ npx nlspec get --spec myservice --section 5.1
 - Patch management — FUTURE: nlspec_patch_* tools (lifecycle management)
 - Spec validation — FUTURE: nlspec_validate tool (dangling refs, orphans)
 - Graph queries — FUTURE: nlspec_graph tool (dependency visualization)
+- Layer-aware validation (cross-layer constraint checking) — handled by mcp-server-spec
+- Layer stack traversal across multiple specs — handled by mcp-server-spec
 - Code generation — agent's job, not nlspec's
 - Test execution — agent's job using test runners
 - Deployment — agent's job using platform tools

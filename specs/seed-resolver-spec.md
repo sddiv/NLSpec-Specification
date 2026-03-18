@@ -121,6 +121,8 @@ RECORD SeedExport:
   value           : String              -- the rule, constraint, or data
   override        : OverrideLevel       -- NEVER | WITH_JUSTIFICATION | UNRESTRICTED
   source_ref      : String              -- [SEC:x.x] in the originating spec
+  layer_target    : String | None       -- which layer receives this export (L2, L3, L4, "derived", or None for non-layered)
+  direction       : String = "DOWNWARD" -- DOWNWARD (default), UPWARD, or LATERAL
   graph_depth     : Integer             -- hops from the consuming spec (0 = direct dependency)
 
   USED BY: collect_exports, detect_conflicts, resolve_conflicts, emit_manifest
@@ -130,6 +132,7 @@ RECORD SeedExpect:
   spec_id         : String              -- which spec declares this expectation
   expect_name     : String              -- name from the EXPECTS block
   from            : String              -- spec_id or "ANY_DEPENDENCY"
+  from_layer      : Integer | None      -- which layer provides this (1-4, or None for non-layered)
   type            : ExportType          -- expected type
   description     : String              -- what is needed and why
   required        : Boolean             -- true = build fails if unmatched
@@ -155,6 +158,7 @@ RECORD SeedManifest:
   seed_data       : List<SeedRule>      -- initial state populations
   conflicts       : List<ConflictReport>-- resolved conflicts (for audit trail)
   unmatched       : List<SeedExpect>    -- optional expects with fallbacks applied
+  layer_conflicts : List<ConflictReport> -- conflicts from upward constraint flow crossing NEVER boundaries
 
   USED BY: emit_manifest, validate_manifest
 
@@ -199,6 +203,13 @@ FUNCTION walk_graph:
   3. Build directed graph of all spec dependencies
   4. Topological sort (leaves first — specs with no IMPORTS come first)
   5. If cycle detected, warn but do not fail. Process each spec in the cycle once.
+  6. When traversing specs with Layer declarations, also follow DERIVES FROM links
+     in addition to IMPORTS declarations. The derivation chain (L1→L2→L3→L4) is a
+     separate axis from the dependency chain (IMPORTS). Both must be walked.
+  7. Layer derivation links are walked parent-first (L1 before L2, L2 before L3)
+  8. When traversing specs with COMPOSES WITH declarations, also add edges for
+     horizontal peers. All specs in a horizontal composition are resolved as a
+     single unit at their layer level.
 
   USES: none (reads spec files directly)
   THROWS: SpecNotFound, CycleDetected (warning only)
@@ -223,7 +234,13 @@ FUNCTION collect_exports:
         - ASSET exports → design constraints (enforced when generating UI/config)
      e. Create SeedExport records with graph_depth calculated as the shortest
         path from relative_to to this spec in the dependency graph
-  2. Return all collected exports
+  2. For layer-aware exports (layer_target is set): record the direction (DOWNWARD or UPWARD)
+     - DOWNWARD exports flow from parent to derived specs in the layer hierarchy
+     - UPWARD exports flow from derived specs back toward their parent layer
+     - LATERAL exports (direction=LATERAL): these flow between horizontally composed
+       peers at the same layer. They are resolved within the layer's composition unit.
+     - Non-layered exports (layer_target=None) are treated as before (standard dependency flow)
+  3. Return all collected exports
 
   USES: SeedExport
   THROWS: MalformedExport, MissingSection16
@@ -297,6 +314,14 @@ FUNCTION resolve_conflicts:
      c. For policies: cannot auto-resolve → BUILD FAILS with suggestion
   3. If still tied, apply "closer to root wins" (lower graph_depth)
   4. If still tied → BUILD FAILS with detailed conflict report
+  5. For UPWARD exports: trace the derivation chain to find the parent layer's constraint
+     a. If the parent has an override=NEVER export on the same target, the upward export
+        is a conflict. Add to layer_conflicts in the manifest.
+     b. If the parent has override=WITH_JUSTIFICATION, flag for human review but do not fail
+     c. If the parent has override=UNRESTRICTED, the upward export is applied automatically
+  6. For LATERAL exports: verify that both sides of a lateral interface agree on the
+     exported contract. If spec-a exports an interface that spec-b depends on but spec-b
+     expects a different contract, this is a conflict. Add to layer_conflicts.
 
   USES: SeedExport, ConflictReport
   THROWS: UnresolvableConflict

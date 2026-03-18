@@ -22,6 +22,17 @@ Specs have a TYPE: SYSTEM (running code), PATTERN (reusable blueprint), or ASSET
 (static resources). Check the spec header to determine the type. PATTERN and ASSET
 specs are consumed by SYSTEM specs via "USES PATTERN:" and "USES ASSET:" in Architecture.3.
 
+Specs may also declare a LAYER: 1-Specification, 2-Realization, 3-Configuration, or
+4-UserProfile. When a Layer is declared, the spec participates in the 4-layer composition
+model. Check the LayerContext section for derivation chain, horizontal composition,
+constraint flow, and substitution boundaries. Composition is two-dimensional:
+**vertical** (L1→L2→L3→L4 derivation) and **horizontal** (multiple specs at the same
+layer composing together via COMPOSES WITH). A spec at Layer N+1 derives from a spec
+at Layer N — it inherits all contracts and adds layer-specific concerns. Constraints
+flow downward by default, upward when user preferences are non-negotiable, and
+laterally between horizontally composed peers. Specs without a Layer declaration are
+standalone and do not participate in layer composition.
+
 ---
 
 ## Spec Tolerance
@@ -351,6 +362,27 @@ DEPENDENCY BOUNDARY RULES (critical for multi-spec projects):
   - If a seed manifest exists (build/seed-manifest.json), read it before
     implementing. The resolved constraints are non-negotiable.
   - Treat imported definitions as READ-ONLY.
+
+LAYER COMPOSITION RULES (when spec declares a Layer):
+  - Read the LayerContext section FIRST. It tells you: what this spec derives from
+    and composes with (LayerContext.1), the full stack (LayerContext.2), and constraint
+    flow (LayerContext.3).
+  - If DERIVES FROM declares a parent spec, read the parent's Contracts section EXPORTS.
+    Every inherited EXPORT is a constraint you MUST satisfy — treat inherited EXPORTS
+    marked override=NEVER as immutable invariants.
+  - If COMPOSES WITH declares horizontal peers, read each peer's EXPORTS. Verify
+    that every `depends_on` interface is satisfied by a peer's EXPORT. Treat
+    co-required peers as mandatory — the layer is incomplete without them.
+  - Follow cross-layer references [Ln:spec-id:Section.x] to trace constraints back
+    to their source layer. When validating, ensure the implementation honors constraints
+    from every layer in the derivation chain.
+  - For UPWARD constraint flow (LayerContext.3): if the spec declares upward exports,
+    validate them against the parent layer. If the parent constraint is override=NEVER,
+    report a conflict — do not silently violate it.
+  - For LATERAL constraint flow: validate interface contracts between composing peers.
+    Both sides of a lateral interface must agree on the exported contract.
+  - Substitution boundary (LayerContext.4): your implementation must be swappable at
+    this layer without breaking specs above, below, or beside (lateral peers).
 ```
 
 ### MODE: FIX
@@ -820,6 +852,22 @@ When you encounter an IMPORT:
 2. If yes, read ONLY the referenced section (not the whole file)
 3. If no, ask: "I need {spec-file} Section {x.x} for the definition of {Name}."
 4. Treat imported definitions as read-only — never modify another spec's RECORDs
+
+### Cross-Layer References
+
+When a spec declares a Layer, it may contain cross-layer references:
+```
+[Ln:{spec-id}:{Section}.{subsection}]
+```
+
+When you encounter a cross-layer reference:
+1. Identify the layer number (Ln) and spec-id
+2. If the referenced spec exists, read the referenced section for context
+3. If the referenced spec is marked `(planned)` in the LAYER STACK, note it as
+   unresolvable — do not block on it
+4. Cross-layer references are traceability markers. They tell you WHERE a constraint
+   originates. Follow them during validation to ensure your implementation honors
+   constraints from every layer in the derivation chain.
 
 ---
 

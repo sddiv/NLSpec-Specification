@@ -127,16 +127,21 @@ nlspec_split({namespace: "myproject", spec_id: "monolith", strategy: "cluster"})
 | API | HTTP endpoints, gRPC services, CLI commands, MCP tools |
 | Errors | Complete error hierarchy with handling rules |
 | Config | Every knob: type, default, env var, validation |
+| SystemManifest | Platform composition, hardware, kernels, environment configs |
 | Deployment | Container images, K8s manifests, PIPELINE definitions |
 | Scenarios | End-to-end behavioral tests (the holdout set) |
 | Dependencies | External systems, libraries, and asset packs with pinned versions and verify-after-install rules |
 | FileStructure | Expected directory layout |
 | Maintenance | Bug categories, patch format, scenario tiers |
-| BuildAndRun | Exact commands to build, test, run, verify |
+| BuildAndRun | Exact commands to build, test, run, verify, artifact manifest |
+| AgentPipeline | AI agent execution protocol (provision → build → deploy → validate) |
 | Boundaries | Explicit non-goals (prevents scope creep) |
-| Contracts | EXPORTS, EXPECTS, conflict resolution (for multi-spec projects) |
+| Contracts | EXPORTS, EXPECTS, layer-aware contracts, conflict resolution |
+| LayerContext | (Optional) Layer composition: derivation, stack, constraint flow |
 
 Sections are declared per-spec. PATTERN and ASSET specs use different sections.
+LayerContext is optional across all spec types — include it when composing specs
+across the 4-layer model.
 
 ## Key Concepts
 
@@ -165,6 +170,17 @@ workspace (images, CSS, fonts, tokens) and define the style guide (RULEs and
 TOKENs) that agents must follow when writing code — consumed via `USES ASSET:`.
 The agent applies prior art patterns from training knowledge and reads full specs
 for novel patterns and assets.
+
+**4-layer composition (optional).** Specs can declare a Layer (1-Specification,
+2-Realization, 3-Configuration, 4-UserProfile) and use the LayerContext section to
+define derivation chains, horizontal composition, constraint flow, and substitution
+boundaries. Composition is two-dimensional: **vertical** (one L1 produces many L2
+realizations, each L2 supports many L3 configurations, each L3 serves many L4 profiles)
+and **horizontal** (multiple specs at the same layer compose together — an OS
+realization is kernel + filesystem + networking, not one monolith). Constraints flow
+downward by default, upward when user preferences are non-negotiable, and laterally
+between horizontally composed peers. The layer model is opt-in — specs without a
+Layer declaration work exactly as before.
 
 **Agent pipeline.** Seven modes: DESIGN → SPEC → IMPLEMENT → VALIDATE, plus FIX,
 CONSOLIDATE, and DESCRIBE. DESIGN produces the architecture (Abstract, Problem, Architecture, Boundaries, Contracts).
