@@ -171,16 +171,7 @@ TOKENs) that agents must follow when writing code — consumed via `USES ASSET:`
 The agent applies prior art patterns from training knowledge and reads full specs
 for novel patterns and assets.
 
-**4-layer composition (optional).** Specs can declare a Layer (1-Specification,
-2-Realization, 3-Configuration, 4-UserProfile) and use the LayerContext section to
-define derivation chains, horizontal composition, constraint flow, and substitution
-boundaries. Composition is two-dimensional: **vertical** (one L1 produces many L2
-realizations, each L2 supports many L3 configurations, each L3 serves many L4 profiles)
-and **horizontal** (multiple specs at the same layer compose together — an OS
-realization is kernel + filesystem + networking, not one monolith). Constraints flow
-downward by default, upward when user preferences are non-negotiable, and laterally
-between horizontally composed peers. The layer model is opt-in — specs without a
-Layer declaration work exactly as before.
+**Two-dimensional spec composition (optional).** See the next section for details.
 
 **Agent pipeline.** Seven modes: DESIGN → SPEC → IMPLEMENT → VALIDATE, plus FIX,
 CONSOLIDATE, and DESCRIBE. DESIGN produces the architecture (Abstract, Problem, Architecture, Boundaries, Contracts).
@@ -197,6 +188,77 @@ traceable.
 
 **The system grows with you.** Phase 0 requires nothing but a template. Phase 3
 manages an organization. Same format at every phase.
+
+## Two-Dimensional Spec Composition
+
+Without the layer model, nlspec specs form a flat dependency graph. Spec A imports
+from Spec B. That's one dimension: specs linked by IMPORT/EXPORT. It works, but it
+doesn't capture the fact that a product exists at multiple levels of abstraction
+simultaneously, and that a single layer of that product is often too large for one spec.
+
+The 4-layer composition model adds a second dimension. Specs now compose in two ways:
+
+```
+                        HORIZONTAL (same layer, different concerns)
+                    ┌──────────────────────────────────────────────┐
+                    │                                              │
+                    │    kernel ←──→ filesystem ←──→ networking    │
+                    │      │             │              │          │
+                    │      └─────────────┴──────────────┘          │
+                    │         all L2, composing together           │
+                    └──────────────────────────────────────────────┘
+                                        │
+              VERTICAL                  │
+           (across layers,              │
+            derivation)                 │
+                │                       │
+                ▼                       ▼
+  ┌──────────────────────────────────────────────────────────────┐
+  │  L1  os-spec              Contracts, interfaces, invariants  │
+  │       │                                                      │
+  │       ▼                                                      │
+  │  L2  kernel + fs + net    Platform-specific realization      │
+  │       │                                                      │
+  │       ▼                                                      │
+  │  L3  server-config        Domain-specific tuning             │
+  │       │                                                      │
+  │       ▼                                                      │
+  │  L4  db-server-profile    User-specific preferences          │
+  └──────────────────────────────────────────────────────────────┘
+```
+
+**Vertical composition** is derivation across layers. Each layer inherits from
+the one above it and adds its own concerns. One L1 specification produces many L2
+realizations (React vs iOS vs CLI). Each L2 supports many L3 configurations (healthcare
+vs education vs enterprise). Each L3 serves many L4 user profiles (radiologist vs nurse
+vs admin). Swapping at any level doesn't disturb the levels above or below — that's
+the substitution boundary property.
+
+**Horizontal composition** is multiple specs at the same layer composing together.
+A real system at any layer is rarely one spec. An OS realization is kernel + filesystem
++ networking + drivers. A web app realization is frontend + backend + database schema +
+message queue. Each of these is its own spec with its own DataModel, Functions, API,
+and Scenarios, but they share a layer, derive from the same parent, and define
+interfaces between each other via `COMPOSES WITH`.
+
+The two dimensions are orthogonal. You can use vertical-only (simple products with one
+spec per layer), horizontal-only (a complex system at a single layer of abstraction),
+or both (complex systems at multiple levels of abstraction). The layer model is opt-in —
+specs without a `Layer:` declaration work exactly as before.
+
+**Constraint flow is three-directional.** Downward (parent constrains child — the
+default). Upward (child preferences propagate to parent — for non-negotiable user
+requirements). Lateral (peers constrain each other through shared interfaces —
+kernel provides block device API, filesystem depends on it).
+
+**Relationship types for horizontal peers.** `co-required` means both must be present
+(kernel + filesystem). `optional` means the peer adds capability but isn't necessary
+(GPU driver). `alternative` means only one of the set is used (ext4 vs btrfs).
+
+See `NLSPEC-TEMPLATE.md` section LayerContext for the full declaration syntax:
+DERIVES FROM (vertical parent), COMPOSES WITH (horizontal peers), LAYER STACK
+(the full 2D tree), CONSTRAINT FLOW (downward + upward + lateral), and SUBSTITUTION
+BOUNDARY (what's swappable at each layer).
 
 ## How nlspec Differs from Existing Tools
 
@@ -215,6 +277,7 @@ idea into a complete specification for organizational-scale AI development.
 | **Growth path** | None | None | None | Phase 0 → 1 → 2 → 3 with tooling at each step |
 | **Decomposition** | Manual | Manual | Manual | `nlspec_split` analyzes and decomposes specs |
 | **Autonomous exec** | None | None | None | Dark factory mode: self-driving pipeline with retry, escalation, artifact verification |
+| **Composition** | None | None | None | 2D: vertical (4-layer derivation) + horizontal (same-layer peers via COMPOSES WITH) |
 | **Self-describing** | No | No | No | Yes — the spec for nlspec is itself an nlspec |
 
 ## Why This Will Be the Norm
