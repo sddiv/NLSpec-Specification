@@ -47,7 +47,7 @@ nlspec/
 └── specs/
     ├── CLAUDE-MCP.md            # Agent instructions (Phase 1+ — use MCP tools)
     ├── bootstrap-spec.md        # Phase 1: parser, store, query, 8 tools
-    ├── mcp-server-spec.md       # Phase 2a: slice, patch, validate, split, namespaces
+    ├── mcp-server-spec.md       # Phase 2a: slice, patch, validate, split, namespaces, substrates
     ├── seed-resolver-spec.md    # Phase 2b: dependency contracts, seed manifests
     └── pattern-catalog.md       # Prior art pattern reference (TYPE: CATALOG)
 ```
@@ -57,9 +57,9 @@ nlspec/
 | `NLSPEC-TEMPLATE.md` | The blank spec format. Copy it, fill it in. | 0+ |
 | `CLAUDE.md` | Agent reads spec files directly from disk. 7 modes: DESIGN → SPEC → IMPLEMENT → VALIDATE + FIX, CONSOLIDATE, DESCRIBE | 0 |
 | `specs/CLAUDE-MCP.md` | Agent uses MCP tools for structured spec access. Same 7 modes. | 1+ |
-| `NLSPEC-SYSTEM.md` | How specs grow with your system. | All |
+| `NLSPEC-SYSTEM.md` | How specs grow with your system. Phases, layers, substrates, S3+OTF. | All |
 | `specs/bootstrap-spec.md` | Core system — parser, store, query engine, 8 MCP tools | 1+ |
-| `specs/mcp-server-spec.md` | Extensions — decomposition, namespaces, 8 more tools | 2a+ |
+| `specs/mcp-server-spec.md` | Extensions — decomposition, namespaces, substrates, S3+OTF storage | 2a+ |
 | `specs/seed-resolver-spec.md` | Dependency contracts — graph walker, contract matcher, seed manifest | 2b+ |
 | `specs/pattern-catalog.md` | Prior art patterns — names + descriptions, agent uses training knowledge | 0+ |
 
@@ -102,7 +102,8 @@ Phase 1: run the bootstrap server, swap CLAUDE.md for CLAUDE-MCP.md, and get
 structured access via MCP tools.
 
 ```bash
-npx @nlspec/server --specs-dir ./specs
+pip install nlspec-server                          # or add to pyproject.toml
+nlspec-server --specs-dir ./specs                  # stdio for local dev
 cp path/to/nlspec/specs/CLAUDE-MCP.md CLAUDE.md    # replace Phase 0 instructions
 ```
 
@@ -171,7 +172,13 @@ TOKENs) that agents must follow when writing code — consumed via `USES ASSET:`
 The agent applies prior art patterns from training knowledge and reads full specs
 for novel patterns and assets.
 
-**Two-dimensional spec composition (optional).** See the next section for details.
+**Two-dimensional spec composition (optional).** Vertical (DERIVES FROM across layers)
++ horizontal (COMPOSES WITH at the same layer). See below.
+
+**Three-dimensional substrates (optional).** When a project branches into multiple
+platforms, versions, or feature variants, each branch forms a substrate — a complete
+layer stack diverging from a shared ancestor. The MCP server detects substrates from
+the DERIVES FROM graph and resolves linear spec chains for agents. See `NLSPEC-SYSTEM.md`.
 
 **Agent pipeline.** Seven modes: DESIGN → SPEC → IMPLEMENT → VALIDATE, plus FIX,
 CONSOLIDATE, and DESCRIBE. DESIGN produces the architecture (Abstract, Problem, Architecture, Boundaries, Contracts).
@@ -260,6 +267,42 @@ DERIVES FROM (vertical parent), COMPOSES WITH (horizontal peers), LAYER STACK
 (the full 2D tree), CONSTRAINT FLOW (downward + upward + lateral), and SUBSTITUTION
 BOUNDARY (what's swappable at each layer).
 
+## Three-Dimensional Substrates
+
+The 2D model captures composition within a single product variant. But real projects
+branch: one L1 spec produces web, iOS, and android L2 realizations, each with its own
+L3/L4 stack. These branches are **substrates** — parallel layer stacks sharing an
+ancestor but diverging at a branching point.
+
+```
+                    L1: Payment Contracts
+                   /         |          \
+          L2: Web           L2: iOS          L2: Android
+          /    \            /    \            /    \
+     L3: Prod  L3: Dev  L3: Prod  L3: Dev  L3: Prod  L3: Dev
+```
+
+Substrates are polymorphic. The branching axis can represent platform variants
+(spatial), version history (temporal), or feature flags (feature). NLSpec's own phase
+system is a temporal substrate: Phase 1 → Phase 2a → Phase 2b is a progression where
+each phase carries its own independent layer stack.
+
+Substrates are **not declared** — they are inferred from the DERIVES FROM graph by the
+MCP server. The server builds the substrate topology on-the-fly in memory and caches it.
+
+For agents, the key tool is `nlspec_substrate_query`: ask for a substrate by name, get
+a linear L1→L4 chain back. The agent doesn't need to understand the full 3D topology —
+just ask for "ios" and get the payment L1, iOS L2, iOS-prod L3, and US L4.
+
+For humans, the substrate graph powers 3D visualization — X-axis for horizontal
+composition, Y-axis for layer derivation, Z-axis for substrate branching.
+
+Spec files remain markdown in a filesystem (local or S3). The MCP server builds two
+derived indices: SQLite for element-level search, and an in-memory graph for substrate
+topology. Both are rebuildable from the markdown files at any time.
+
+Read `NLSPEC-SYSTEM.md` for the full substrate model.
+
 ## How nlspec Differs from Existing Tools
 
 The term "nlspec" was coined by [StrongDM](https://factory.strongdm.ai/) to mean
@@ -277,7 +320,7 @@ idea into a complete specification for organizational-scale AI development.
 | **Growth path** | None | None | None | Phase 0 → 1 → 2 → 3 with tooling at each step |
 | **Decomposition** | Manual | Manual | Manual | `nlspec_split` analyzes and decomposes specs |
 | **Autonomous exec** | None | None | None | Dark factory mode: self-driving pipeline with retry, escalation, artifact verification |
-| **Composition** | None | None | None | 2D: vertical (4-layer derivation) + horizontal (same-layer peers via COMPOSES WITH) |
+| **Composition** | None | None | None | 3D: vertical (4-layer derivation) + horizontal (same-layer peers) + substrate branching (platforms, versions, features) |
 | **Self-describing** | No | No | No | Yes — the spec for nlspec is itself an nlspec |
 
 ## Why This Will Be the Norm

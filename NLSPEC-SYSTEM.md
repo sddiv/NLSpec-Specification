@@ -354,8 +354,8 @@ to run tests:
 PIPELINE: pr-check
   TRIGGER: pull_request
   STEPS:
-    - RUN: npm test -- --filter "SMOKE"
-    - RUN: npm test -- --filter "AFFECTED:${CHANGED_SECTIONS}"
+    - RUN: pytest -k "SMOKE"
+    - RUN: pytest -k "AFFECTED" --sections "${CHANGED_SECTIONS}"
   NOTES:
     - SMOKE scenarios run on every PR
     - AFFECTED scenarios run only for sections touched by the PR
@@ -570,3 +570,169 @@ project with namespaces gains cross-layer validation via the MCP server's graph 
 Specs without a Layer declaration are standalone — they work exactly as before. The
 layer model adds composition semantics on top of the existing template, phases, and
 tooling without changing them.
+
+---
+
+## Substrate Dimensions — The 3D Model
+
+The 4-layer model is two-dimensional: vertical (DERIVES FROM) and horizontal
+(COMPOSES WITH). But real projects branch along a third axis. An L1 specification
+may produce three L2 realizations — web, iOS, android — each carrying independent
+L3 and L4 stacks. This branching creates **substrates**: parallel spec stacks that
+share an ancestor but diverge at a branching point.
+
+### What Is a Substrate?
+
+A substrate is a complete layer stack (or partial stack) that branches from another
+stack at some layer. The branching point can be at any layer:
+
+```
+L1 branches → multiple L2s (most common: one spec, many platforms)
+L1 branches → multiple L1s (multiple products in the same project)
+L2 branches → multiple L3s (same realization, different deployments)
+L3 branches → multiple L4s (same deployment, different user profiles)
+```
+
+Each substrate carries its own independent layers below the branching point. The
+web substrate's L3 (webpack config, CDN settings) is completely independent of
+the iOS substrate's L3 (Xcode build settings, App Store config). They share the
+L1 above the branch but diverge below it.
+
+```
+                        L1: Payment Contracts
+                       /         |          \
+              L2: Web           L2: iOS          L2: Android
+              /    \            /    \            /    \
+         L3: Prod  L3: Dev  L3: Prod  L3: Dev  L3: Prod  L3: Dev
+           |         |         |         |         |         |
+         L4: US    L4: US    L4: US    L4: US    L4: US    L4: US
+         L4: EU    L4: EU    L4: JP                        L4: IN
+```
+
+Each vertical column is a substrate. The full project topology is a tree of
+substrates branching from shared ancestors.
+
+### Substrate Types
+
+Substrates are **polymorphic** — the branching axis can represent different
+kinds of divergence:
+
+| Substrate Type | What It Represents | Example |
+|---------------|-------------------|---------|
+| **Spatial** | Platform or target variants coexisting simultaneously | web, iOS, android |
+| **Temporal** | Version history — the same system evolving over time | phase-1, phase-2a, phase-2b |
+| **Feature** | Feature flag variants — different capabilities enabled | with-payments, without-payments |
+
+The system does not enforce substrate types. A substrate is simply a branching
+point in the DERIVES FROM graph where one spec produces multiple children at the
+next layer (or the same layer, for L1→L1 branching).
+
+### NLSpec's Own Phases as Temporal Substrates
+
+NLSpec itself is a 3D spec. The phase system maps directly to temporal substrates:
+
+```
+L1: nlspec-core (the template, the format)
+ ├── substrate: phase-1
+ │   └── L2: bootstrap-spec (parser, store, 8 tools)
+ │       └── L3: bootstrap-config (SQLite index, local files)
+ │
+ ├── substrate: phase-2a
+ │   └── L2: mcp-server-spec (DERIVES FROM bootstrap, adds slice/patch/validate/graph)
+ │       └── L3: mcp-server-config (namespaces, patches dir)
+ │
+ ├── substrate: phase-2b
+ │   └── L2: seed-resolver-spec (DERIVES FROM mcp-server, adds dependency contracts)
+ │       └── L3: seed-resolver-config
+ │
+ └── substrate: phase-3
+     └── L2: org-scale-spec (planned — DERIVES FROM seed-resolver)
+         └── L3: org-scale-config
+```
+
+Each phase is a substrate that carries its own L2/L3/L4 stack. Phase 2a subsumes
+Phase 1 (it DERIVES FROM bootstrap). Phase 2b subsumes Phase 2a. The temporal
+substrate axis is the versioning axis — you can "slice" at any phase and see a
+coherent, self-contained system at that point in time.
+
+### 3D Visualization as Versioning
+
+The 3D model serves two audiences:
+
+**For humans:** A spatial visualization where the X-axis is horizontal composition
+(COMPOSES WITH), the Y-axis is layer derivation (DERIVES FROM), and the Z-axis is
+substrate branching. You can rotate, zoom, slice at a substrate to see just that
+stack. For temporal substrates, the Z-axis becomes a timeline — you see the system
+evolving.
+
+**For agents:** The MCP server resolves substrate paths. An agent asks:
+"give me the spec chain for namespace=payments, substrate=ios, L1→L4" and gets
+exactly the payment L1, the iOS L2, the iOS-prod L3, and the US L4 — a linear
+chain cut from the 3D tree.
+
+This makes the 3D model a **versioning tool**: temporal substrates let you navigate
+the evolution of a spec system the same way git lets you navigate the evolution of
+code. The difference is that spec evolution is semantic (Phase 1 adds structured access,
+Phase 2a adds decomposition) rather than line-level diffs.
+
+### Substrate Detection
+
+Substrates are not declared explicitly. They are **inferred** from the existing
+DERIVES FROM graph:
+
+1. Walk the DERIVES FROM edges across all specs in a namespace
+2. When a spec at layer N has multiple children at layer N+1 (or N), that's a
+   branching point — each child is the root of a substrate
+3. Follow each branch down through its L3/L4 stack to get the full substrate
+4. Name substrates from the branching spec's identifier (e.g., the "ios" substrate
+   is named from the L2 spec `l2-ios-realization`)
+
+No new metadata is needed. The data already exists in the spec headers. The MCP
+server's graph engine builds the substrate tree on-the-fly from DERIVES FROM edges.
+
+### Cross-Substrate Interaction
+
+Substrates are independent by default. The iOS L3 config does not affect the
+Android L3 config. However, some projects need cross-substrate contracts:
+
+- A shared API gateway that all platform substrates call
+- A compliance spec that cross-cuts all substrates
+- A shared component library used by web and mobile substrates
+
+Cross-substrate interaction is handled through the existing COMPOSES WITH and
+IMPORT mechanisms — a spec in one substrate can IMPORT from a spec in another.
+The MCP server can detect these cross-substrate edges and include them in
+substrate queries when requested.
+
+**Scoping note:** Cross-substrate interaction detection and visualization is a
+future extension. The initial substrate model focuses on detection, querying,
+and linear chain resolution.
+
+### Spec Storage and the On-The-Fly Graph
+
+Specs remain markdown files — stored in a filesystem (local or S3). The markdown
+file is the source of truth: human-readable, diffable, version-controllable.
+
+The MCP server builds the substrate graph **on-the-fly** from the spec files:
+
+1. On startup (or first query), read all spec files from the configured storage
+2. Parse each spec's header: Layer, DERIVES FROM, COMPOSES WITH
+3. Build an in-memory directed graph: nodes are specs, edges are derivation and
+   composition relationships
+4. Detect substrate branching points from the graph topology
+5. Cache the graph. Invalidate when a spec file changes (filesystem watcher for
+   local, S3 event notifications for cloud)
+
+This is the **S3+OTF model**: files in S3 as the persistent source of truth, with
+an on-the-fly graph built in memory by the MCP server. No graph database needed.
+The graph is a derived index, like SQLite is a derived index of the parsed elements.
+
+```
+Source of truth:     specs/*.md (local filesystem or S3)
+Derived index 1:     .nlspec/index.sqlite (element-level search)
+Derived index 2:     in-memory graph (substrate topology, layer chains)
+Cache invalidation:  filesystem watcher (local) or S3 event → SNS/SQS (cloud)
+```
+
+Both indices are rebuildable from the markdown files at any time. Lose the SQLite
+file? Re-import. Restart the server? Graph rebuilds on first query.

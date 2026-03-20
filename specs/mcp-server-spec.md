@@ -14,21 +14,22 @@
 
 ## Table of Contents
 
-1. [Abstract](#1-abstract)
-2. [Problem Statement](#2-problem-statement)
-3. [Architecture Overview](#3-architecture-overview)
-4. [Data Model](#4-data-model)
-5. [Core Functions](#5-core-functions)
-6. [API Surface — MCP Tools](#6-api-surface--mcp-tools)
-7. [Error Model](#7-error-model)
-8. [Configuration](#8-configuration)
-9. [Deployment Artifacts](#9-deployment-artifacts)
-10. [Scenarios](#10-scenarios)
-11. [Dependencies](#11-dependencies)
-12. [File Structure](#12-file-structure)
-13. [Maintenance Workflow](#13-maintenance-workflow)
-14. [Build and Run](#14-build-and-run)
-15. [Boundaries](#15-boundaries)
+1. [Abstract](#abstract)
+2. [Problem Statement](#problem-statement)
+3. [Architecture Overview](#architecture-overview)
+4. [Data Model](#datamodel)
+5. [Core Functions](#functions)
+6. [API Surface — MCP Tools](#api--mcp-tools)
+7. [Error Model](#errors)
+8. [Configuration](#config)
+9. [Deployment Artifacts](#deployment-artifacts)
+10. [Scenarios](#scenarios)
+11. [Dependencies](#dependencies)
+12. [File Structure](#filestructure)
+13. [Maintenance Workflow](#maintenance-workflow)
+14. [Build and Run](#buildandrun-and-run)
+15. [Boundaries](#boundaries)
+16. [Contracts](#contracts-contracts)
 
 ---
 
@@ -36,7 +37,8 @@
 
 The nlspec MCP Server extends the bootstrap system (parser, store, query engine, 8 CRUD
 tools) with context slicing, patch management, spec validation, graph operations,
-namespaces, spec decomposition, and the `nlspec_import` tool.
+namespaces, spec decomposition, substrate detection and querying, S3+OTF storage,
+and the `nlspec_import` tool.
 
 This spec supports the phase transitions described in NLSPEC-SYSTEM.md:
 - **Phase 1 → 2:** `nlspec_split` decomposes a monolith spec into N specs with
@@ -55,7 +57,7 @@ The bootstrap system provides CRUD + search on spec elements. An agent can read,
 and query elements in any loaded spec.
 
 ### Deficiency
-Four capabilities are missing for production use:
+Six capabilities are missing for production use:
 
 1. **Context slicing** — the agent reads full sections when fixing bugs. It should read
    only the minimal set of elements reachable from the failing scenario.
@@ -66,12 +68,18 @@ Four capabilities are missing for production use:
 4. **Namespace & import** — specs are loaded by file path. There is no namespace system
    for organizing specs across projects, and no tool for importing specs into the
    running system.
+5. **Substrate awareness** — when a project branches into multiple platforms or versions,
+   agents have no way to navigate the 3D spec topology. They need a linear chain
+   (L1→L4) for a specific substrate, not the full branching tree.
+6. **Cloud storage** — specs are read from local filesystem only. Production deployments
+   need S3-backed storage with on-the-fly graph building and cache invalidation.
 
 ### Target State
 A complete MCP server that supports the full spec lifecycle: write → validate → implement
 → fix (with context slicing) → patch → absorb → evolve. Specs live in namespaces and
 are imported via `nlspec_import`. The system manages its own specs the same way it
-manages any other project's specs.
+manages any other project's specs. Agents navigate multi-substrate projects via linear
+chain queries. Spec files can live in S3 with on-the-fly graph building in memory.
 
 ### Key Insight
 Once you have `nlspec_import`, the system bootstraps itself. Import the bootstrap spec
@@ -96,7 +104,7 @@ it back.
 |                                                            |
 |  +-----------+  +------------+  +-------------+           |
 |  | Bootstrap |  | Advanced   |  | Namespace   |           |
-|  | Tools (8) |  | Tools (7)  |  | Manager     |           |
+|  | Tools (8) |  | Tools (10) |  | Manager     |           |
 |  +-----------+  +------------+  +-------------+           |
 |       |               |               |                    |
 |       +-------+-------+-------+-------+                    |
@@ -115,13 +123,19 @@ it back.
 |    |  - Patch Manager     |                                |
 |    |  - Spec Validator    |                                |
 |    |  - Graph Engine      |                                |
+|    |  - Substrate Engine  |                                |
 |    +----------+-----------+                                |
 |               |                                            |
 |    +----------v-----------+                                |
-|    |  Persistence         |                                |
-|    |  - .md files (truth) |                                |
-|    |  - SQLite (index)    |                                |
-|    |  - patches/ dir      |                                |
+|    |  Persistence (S3+OTF)|                                |
+|    |  Source of truth:     |                                |
+|    |  - .md files          |                                |
+|    |    (local or S3)      |                                |
+|    |  Derived indices:     |                                |
+|    |  - SQLite (elements)  |                                |
+|    |  - In-memory graph    |                                |
+|    |    (substrates)       |                                |
+|    |  - patches/ dir       |                                |
 |    +----------------------+                                |
 +-----------------------------------------------------------+
 ```
@@ -157,6 +171,14 @@ it back.
 - **Calls:** Query Engine
 - **Called by:** Core Engine
 - **Lifecycle:** Per-query, read-only
+
+### Component: Substrate Engine
+- **Responsibility:** Detect substrate branching in the DERIVES FROM graph, build
+  the 3D substrate topology, resolve linear spec chains for agent consumption
+- **Owns:** In-memory substrate graph (cached), substrate detection heuristics
+- **Calls:** Graph Engine (for DERIVES FROM traversal), Spec Store (for spec headers)
+- **Called by:** Core Engine, nlspec_substrate_query, nlspec_substrate_graph
+- **Lifecycle:** Cached across queries, invalidated on spec import/change
 
 ### Component: Namespace Manager
 - **Responsibility:** Organize specs into namespaces. Resolve namespace-qualified
@@ -312,6 +334,60 @@ RECORD LayerValidationReport:
   USED BY: validate_layer_constraints
 ```
 
+```
+RECORD Substrate:
+  id              : String              -- derived identifier (e.g., "ios", "phase-2a", "with-payments")
+  type            : SubstrateType       -- spatial | temporal | feature
+  branching_layer : Integer             -- the layer at which this substrate branches (1-4)
+  branching_spec  : String              -- namespace/spec-id of the spec that branches into this substrate
+  root_spec       : String              -- namespace/spec-id of this substrate's root (the branching child)
+  stack           : List<LayerStackEntry>  -- the full L1→L4 chain within this substrate
+  cross_substrate : List<String>        -- spec-ids from other substrates that IMPORT from this one
+
+  USED BY: build_substrate_graph, resolve_substrate_chain, nlspec_substrate_query
+
+  INVARIANTS:
+  - branching_layer >= 1 and <= 4
+  - root_spec exists in the store
+  - stack is ordered L1→L4 with no gaps at the branching point
+```
+
+```
+RECORD SubstrateGraph:
+  namespace       : String              -- the namespace this graph covers
+  substrates      : List<Substrate>     -- all detected substrates
+  branching_points: List<BranchingPoint>  -- where the spec graph fans out
+  total_specs     : u64                 -- total specs across all substrates
+  built_at        : Timestamp           -- when this graph was last computed
+
+  USED BY: build_substrate_graph, nlspec_substrate_graph
+
+  INVARIANTS:
+  - every spec in the namespace appears in exactly one substrate's stack
+    (or in the shared ancestor chain above a branching point)
+```
+
+```
+RECORD BranchingPoint:
+  spec_id         : String              -- the parent spec that branches
+  layer           : Integer             -- the layer of the parent spec
+  children        : List<String>        -- the child spec-ids that form substrate roots
+  substrate_type  : SubstrateType       -- inferred type of the branching
+
+  USED BY: build_substrate_graph
+```
+
+```
+RECORD SubstrateChain:
+  namespace       : String
+  substrate_id    : String              -- which substrate was resolved
+  chain           : List<LayerStackEntry>  -- linear L1→L4 spec chain for this substrate
+  total_specs     : u64                 -- number of specs in the chain
+  shared_ancestors: List<String>        -- specs above the branching point (shared with other substrates)
+
+  USED BY: resolve_substrate_chain, nlspec_substrate_query
+```
+
 ### DataModel.2 Additional Enumerations
 
 ```
@@ -326,6 +402,13 @@ ENUM PatchStatus:
   ACTIVE
   ABSORBED
   REJECTED
+```
+
+```
+ENUM SubstrateType:
+  SPATIAL       -- platform or target variants coexisting simultaneously (web, iOS, android)
+  TEMPORAL      -- version history — the same system evolving over time (phase-1, phase-2a)
+  FEATURE       -- feature flag variants — different capabilities enabled
 ```
 
 ### DataModel.3 Namespace-Qualified Identifiers
@@ -640,6 +723,74 @@ FUNCTION validate_layer_constraints(spec_id: String, namespace: String) -> Layer
   10. Resolve all [Ln:...] cross-layer references in this spec:
      a. For each, check if the referenced spec and section exist
   11. Compute overall: PASS if no violations or conflicts, WARN if only unresolved planned refs, FAIL otherwise
+```
+
+### Functions.8 Substrate Engine
+
+```
+FUNCTION build_substrate_graph(namespace: String) -> SubstrateGraph
+  USES: Substrate, SubstrateGraph, BranchingPoint, LayerStackEntry
+  THROWS: NamespaceError
+
+  BEHAVIOR:
+  1. Load all specs in the given namespace from the store
+  2. For each spec, read its Layer declaration and DERIVES FROM edge
+  3. Build a directed graph: nodes are specs, edges are DERIVES FROM relationships
+  4. Walk the graph to find branching points: any spec with 2+ children at the
+     same or next layer
+  5. For each branching point, create a BranchingPoint record
+  6. For each branch, follow the chain downward through L3/L4 to build the
+     full substrate stack
+  7. Infer substrate type from naming conventions and graph topology:
+     - If children are at the same layer as parent → likely spatial (multi-product)
+     - If children form a progression (each DERIVES FROM previous) → temporal
+     - Otherwise → spatial (default)
+  8. Detect cross-substrate imports: specs that IMPORT from a different substrate
+  9. Return SubstrateGraph with all substrates and branching points
+
+  PERFORMANCE:
+  - Target: < 200ms for a namespace with 50 specs
+  - The graph is cached in memory and invalidated on spec change
+
+  NOTES:
+  - Substrate detection is heuristic — the type field is a best guess from topology
+  - Substrates are not declared in specs; they emerge from the DERIVES FROM graph
+  - A spec that has no branching below it is a single-substrate namespace (the trivial case)
+```
+
+```
+FUNCTION resolve_substrate_chain(namespace: String, substrate_id: String, from_layer: Integer, to_layer: Integer) -> SubstrateChain
+  USES: SubstrateChain, Substrate, LayerStackEntry
+  THROWS: NotFound, NamespaceError
+
+  BEHAVIOR:
+  1. Build or retrieve cached substrate graph for the namespace
+  2. Find the substrate matching substrate_id
+  3. Walk the substrate's stack from from_layer to to_layer
+  4. Include shared ancestors above the branching point
+  5. Return SubstrateChain: a linear chain of specs the agent needs
+
+  NOTES:
+  - This is the key function for agent consumption: it cuts through the 3D topology
+    and returns a flat, ordered list of specs
+  - from_layer defaults to 1, to_layer defaults to 4
+  - If the substrate has gaps (e.g., no L4), the chain stops at the deepest available layer
+  - The chain includes shared ancestors so the agent sees the full derivation context
+
+  PERFORMANCE:
+  - Target: < 50ms (graph is cached, this is just a walk)
+```
+
+```
+FUNCTION invalidate_substrate_cache(namespace: String) -> void
+  BEHAVIOR:
+  1. Mark the cached SubstrateGraph for the namespace as stale
+  2. Next call to build_substrate_graph or resolve_substrate_chain will rebuild
+
+  NOTES:
+  - Called automatically when nlspec_import is used for a spec in this namespace
+  - Called when the file watcher detects a spec file change
+  - For S3 storage: triggered by S3 event notification via SNS/SQS
 ```
 
 ---
@@ -1035,6 +1186,94 @@ MCP TOOL: nlspec_layer_validate
     - Cross-layer references to planned specs are flagged as WARN, not FAIL
 ```
 
+### API.9 Substrate Operations
+
+```
+MCP TOOL: nlspec_substrate_query
+  DESCRIPTION: Resolve a substrate chain — get the linear spec path from L1 to L4
+  for a specific substrate. This is the primary tool for agents navigating complex
+  multi-substrate projects. Instead of understanding the full 3D topology, the agent
+  asks for a specific substrate and gets a flat, ordered list of specs.
+
+  PARAMETERS:
+    namespace    : String              -- the namespace to query
+    substrate    : String              -- substrate identifier (e.g., "ios", "phase-2a", "web-prod-us")
+    from_layer   : Integer | None      -- start layer (default: 1)
+    to_layer     : Integer | None      -- end layer (default: 4)
+    include_content : bool             -- if true, include spec content (default: false, returns refs only)
+
+  RETURNS:
+    chain        : SubstrateChain      -- linear L1→L4 chain for this substrate
+    specs        : List<{spec_id: String, layer: Integer, content: String | None}>
+
+  EXAMPLES:
+    nlspec_substrate_query({namespace: "payments", substrate: "ios"})
+    -> Returns: {
+        chain: {
+          namespace: "payments",
+          substrate_id: "ios",
+          chain: [
+            {spec_id: "payments/l1-contracts", layer: 1, ...},
+            {spec_id: "payments/l2-ios-realization", layer: 2, ...},
+            {spec_id: "payments/l3-ios-prod-config", layer: 3, ...},
+            {spec_id: "payments/l4-ios-us-profile", layer: 4, ...}
+          ],
+          total_specs: 4,
+          shared_ancestors: ["payments/l1-contracts"]
+        }
+      }
+
+    nlspec_substrate_query({namespace: "nlspec", substrate: "phase-2a", from_layer: 1, to_layer: 2})
+    -> Returns the bootstrap + mcp-server specs (Phase 2a substrate, L1-L2 only)
+
+  NOTES:
+  - If the substrate doesn't exist, returns NotFound with a list of available substrates
+  - Shared ancestors (specs above the branching point) are included in the chain
+  - With include_content=true, each spec's full markdown content is returned
+    (useful for agents that need to read the specs inline)
+  - The agent does NOT need to understand substrate topology — just ask for a name
+```
+
+```
+MCP TOOL: nlspec_substrate_graph
+  DESCRIPTION: Get the full substrate topology for a namespace. Returns all detected
+  substrates, branching points, and cross-substrate dependencies. Used by visualization
+  tools (3D UIs) and for understanding project topology.
+
+  PARAMETERS:
+    namespace    : String              -- the namespace to analyze
+    include_cross: bool                -- include cross-substrate import edges (default: false)
+
+  RETURNS:
+    graph        : SubstrateGraph      -- full substrate topology
+
+  EXAMPLES:
+    nlspec_substrate_graph({namespace: "payments"})
+    -> Returns: {
+        graph: {
+          namespace: "payments",
+          substrates: [
+            {id: "web", type: "SPATIAL", branching_layer: 1, root_spec: "payments/l2-web-realization", ...},
+            {id: "ios", type: "SPATIAL", branching_layer: 1, root_spec: "payments/l2-ios-realization", ...},
+            {id: "android", type: "SPATIAL", branching_layer: 1, root_spec: "payments/l2-android-realization", ...}
+          ],
+          branching_points: [
+            {spec_id: "payments/l1-contracts", layer: 1, children: ["payments/l2-web-realization", "payments/l2-ios-realization", "payments/l2-android-realization"], substrate_type: "SPATIAL"}
+          ],
+          total_specs: 13,
+          built_at: "2026-03-20T..."
+        }
+      }
+
+  NOTES:
+  - This is an expensive operation (builds the full graph). Results are cached.
+  - With include_cross=true, each substrate's cross_substrate field is populated
+    with specs from other substrates that IMPORT from it
+  - A namespace with no branching returns a single-substrate graph (the trivial case)
+  - Used by L2Mify's 3D visualization and other UI tools, not typically by coding agents
+    (coding agents use nlspec_substrate_query for a specific chain)
+```
+
 ---
 
 ## Errors
@@ -1090,6 +1329,47 @@ CONFIG nlspec.import.auto_namespace
   default: true
   description: When true, nlspec_import creates namespaces automatically
   env: NLSPEC_IMPORT_AUTO_NAMESPACE
+
+CONFIG nlspec.storage.backend
+  type: String
+  default: "local"
+  description: Storage backend for spec files. "local" reads from filesystem,
+               "s3" reads from an S3 bucket.
+  env: NLSPEC_STORAGE_BACKEND
+  values: "local" | "s3"
+
+CONFIG nlspec.storage.s3.bucket
+  type: String | None
+  default: None
+  description: S3 bucket name when storage backend is "s3"
+  env: NLSPEC_S3_BUCKET
+
+CONFIG nlspec.storage.s3.prefix
+  type: String
+  default: "specs/"
+  description: S3 key prefix for spec files
+  env: NLSPEC_S3_PREFIX
+
+CONFIG nlspec.storage.s3.region
+  type: String
+  default: "us-east-1"
+  description: AWS region for S3 bucket
+  env: NLSPEC_S3_REGION
+
+CONFIG nlspec.substrate.cache_ttl_ms
+  type: u64
+  default: 300000
+  description: Time-to-live for the in-memory substrate graph cache (milliseconds).
+               Set to 0 to disable caching (rebuild on every query).
+  env: NLSPEC_SUBSTRATE_CACHE_TTL
+
+CONFIG nlspec.storage.watch
+  type: bool
+  default: true
+  description: Enable file watching for cache invalidation. For local storage,
+               uses filesystem watcher. For S3, listens on SNS/SQS for S3 event
+               notifications. When false, cache only invalidates on re-import.
+  env: NLSPEC_STORAGE_WATCH
 ```
 
 ---
@@ -1099,22 +1379,35 @@ CONFIG nlspec.import.auto_namespace
 ### Deployment.1 Distribution
 
 ```
-Distribution: npm package @nlspec/server
-Installation: npm install -g @nlspec/server  OR  npx @nlspec/server
+Distribution:
+  PyPI:   pip install nlspec-server              (local dev, stdio transport)
+  Docker: ghcr.io/nlspec/nlspec-server:latest    (production, SSE transport)
 
 The package includes both bootstrap and MCP server capabilities.
 The bootstrap tools are always available. The advanced tools (slice, patch,
-validate, graph, import, namespaces) are part of the same server binary.
+validate, graph, import, namespaces, substrates) are part of the same server.
 ```
 
 ### Deployment.2 MCP Configuration
 
+**Production (container, SSE):**
 ```json
 {
   "mcpServers": {
     "nlspec": {
-      "command": "npx",
-      "args": ["@nlspec/server", "--specs-dir", "./specs"]
+      "url": "http://nlspec-server:8080/sse"
+    }
+  }
+}
+```
+
+**Local dev (stdio):**
+```json
+{
+  "mcpServers": {
+    "nlspec": {
+      "command": "nlspec-server",
+      "args": ["--specs-dir", "./specs"]
     }
   }
 }
@@ -1277,6 +1570,58 @@ SCENARIO 13: Split preserves scenarios across clusters               [SEC:API.6]
   AND: Each copy has appropriate [SEC:] tags for its own sections
 ```
 
+### Scenarios.8 Substrate Operations
+
+```
+SCENARIO 14: Detect spatial substrates from DERIVES FROM graph         [SEC:API.9] [SEC:Functions.8]
+  GIVEN: Namespace "payments" has:
+    - L1 spec "l1-contracts" (Layer: 1-Specification)
+    - L2 spec "l2-web" (Layer: 2-Realization, DERIVES FROM: l1-contracts)
+    - L2 spec "l2-ios" (Layer: 2-Realization, DERIVES FROM: l1-contracts)
+    - L2 spec "l2-android" (Layer: 2-Realization, DERIVES FROM: l1-contracts)
+    - L3 spec "l3-web-prod" (Layer: 3-Configuration, DERIVES FROM: l2-web)
+    - L3 spec "l3-ios-prod" (Layer: 3-Configuration, DERIVES FROM: l2-ios)
+  WHEN: Agent calls nlspec_substrate_graph({namespace: "payments"})
+  THEN:
+  - graph.substrates has 3 entries (web, ios, android)
+  - graph.branching_points has 1 entry at l1-contracts, layer 1
+  - Each substrate's type is SPATIAL
+  - web substrate's stack includes l1-contracts → l2-web → l3-web-prod
+  - ios substrate's stack includes l1-contracts → l2-ios → l3-ios-prod
+```
+
+```
+SCENARIO 15: Resolve linear substrate chain for an agent               [SEC:API.9] [SEC:Functions.8]
+  GIVEN: SCENARIO 14 namespace is set up
+  WHEN: Agent calls nlspec_substrate_query({namespace: "payments", substrate: "ios"})
+  THEN:
+  - chain.substrate_id is "ios"
+  - chain.chain has 3 entries: l1-contracts (L1), l2-ios (L2), l3-ios-prod (L3)
+  - chain.shared_ancestors includes "payments/l1-contracts"
+  - chain.total_specs is 3
+```
+
+```
+SCENARIO 16: Detect temporal substrates (NLSpec's own phases)          [SEC:API.9] [SEC:Functions.8]
+  GIVEN: Namespace "nlspec" has:
+    - bootstrap-spec (the core, no DERIVES FROM)
+    - mcp-server-spec (DERIVES FROM bootstrap-spec)
+    - seed-resolver-spec (DERIVES FROM mcp-server-spec)
+  WHEN: Agent calls nlspec_substrate_graph({namespace: "nlspec"})
+  THEN:
+  - graph.substrates detected (each phase as a temporal substrate)
+  - graph.branching_points exist where the chain fans out
+  - Substrate type is TEMPORAL (progression detected)
+```
+
+```
+SCENARIO 17: Substrate query with unknown substrate returns available list   [SEC:API.9]
+  GIVEN: Namespace "payments" has substrates: web, ios, android
+  WHEN: Agent calls nlspec_substrate_query({namespace: "payments", substrate: "desktop"})
+  THEN: Error NotFound is returned
+  AND: Error message includes available substrates: ["web", "ios", "android"]
+```
+
 ---
 
 ## Dependencies
@@ -1284,7 +1629,7 @@ SCENARIO 13: Split preserves scenarios across clusters               [SEC:API.6]
 IMPORT dependencies from nlspec/bootstrap Dependencies
 
 Additional: none. The MCP server spec uses only what bootstrap already provides
-(Node.js, @modelcontextprotocol/sdk, better-sqlite3, TypeScript).
+(Python 3.11+, FastMCP, sqlite3 stdlib, NetworkX, boto3).
 
 ---
 
@@ -1334,28 +1679,34 @@ The system maintains itself.
 ## BuildAndRun and Run
 
 ### Prerequisites
-Same as bootstrap: Node.js >= 20, npm, TypeScript
+Same as bootstrap: Python 3.11+, uv (recommended) or pip
 
-### Build
+### Install
 ```bash
-npm run build
+uv pip install -e ".[dev]"
 ```
 
 ### Test
 ```bash
-npm test                              # all scenarios (bootstrap + mcp-server)
-npm test -- --filter "SCENARIO 1"     # specific scenario
+pytest                                    # all scenarios (bootstrap + mcp-server)
+pytest -k "scenario_01"                   # specific scenario
 ```
 
-### Run as MCP Server
+### Run as MCP Server (local dev, stdio)
 ```bash
-npx @nlspec/server --specs-dir ./specs
+nlspec-server --specs-dir ./specs
+```
+
+### Run as MCP Server (container, SSE)
+```bash
+docker run -p 8080:8080 -v ./specs:/specs ghcr.io/nlspec/nlspec-server:latest \
+    --transport sse --host 0.0.0.0 --port 8080 --specs-dir /specs
 ```
 
 ### Self-Bootstrap Sequence
 ```bash
-# Start the server
-npx @nlspec/server --specs-dir ./specs
+# Start the server (local dev)
+nlspec-server --specs-dir ./specs
 
 # In an MCP client (Claude Code, Cursor, etc.):
 nlspec_import({namespace: "nlspec", spec_id: "bootstrap", path: "specs/bootstrap-spec.md"})
@@ -1378,6 +1729,8 @@ nlspec_validate({namespace: "nlspec", spec_id: "mcp-server"})
 - Namespaces (organize specs across projects)
 - nlspec_import (bring specs into the system)
 - nlspec_split (decompose monolith specs into multiple specs)
+- Substrate detection and querying (3D spec topology, linear chain resolution)
+- S3+OTF storage model (files as source of truth, in-memory graph as derived index)
 - Self-management (system manages its own specs)
 - Phase transition support (Phase 0 → 1 → 2 → 3)
 
@@ -1389,14 +1742,18 @@ nlspec_validate({namespace: "nlspec", spec_id: "mcp-server"})
 - Require all tools — bootstrap tools work standalone without these extensions
 - Prevent namespace cycles — warns about them, like spec import cycles
 - Cross-layer seed resolution (combining layer constraints with dependency constraints) — future extension via seed-resolver integration
+- Cross-substrate interaction detection (identifying imports between substrates) — detected but not visualized; future extension
+- Require a graph database — the substrate graph is an in-memory derived index, not a persistent store
 
 ### Future Extensions (not in this spec):
 - nlspec_describe: MCP App rendering interactive spec overview (dashboard)
-- nlspec_visualize: MCP App rendering interactive diagrams (D3.js force-directed)
+- nlspec_visualize: MCP App rendering interactive diagrams (D3.js force-directed, Three.js 3D substrate view)
 - nlspec_diff: Compare two versions of a spec
 - nlspec_migrate: Upgrade a spec to a newer template version
-- Spec versioning beyond semver (branching, merging)
+- Spec versioning beyond semver (branching, merging, temporal substrate diffing)
 - Remote spec registries (pull specs from URLs or package registries)
+- Cross-substrate contract validation (ensuring cross-substrate imports are satisfied)
+- Substrate-aware patch management (patches scoped to a specific substrate)
 
 ---
 
@@ -1459,14 +1816,34 @@ EXPORT SplitEngine:
   override    : WITH_JUSTIFICATION
   source_ref  : [SEC:Functions.6]
 
+EXPORT SubstrateEngine:
+  type        : CONSTRAINT
+  target      : spec_topology
+  condition   : ALWAYS
+  value       : "3D substrate detection and querying — infers substrate branching from
+                DERIVES FROM graph, resolves linear spec chains for agent consumption,
+                builds in-memory substrate graph with caching"
+  override    : NEVER
+  source_ref  : [SEC:Functions.8]
+
+EXPORT S3StorageBackend:
+  type        : POLICY
+  target      : spec_storage
+  condition   : "config.storage.backend == 's3'"
+  value       : "Spec files stored in S3 as source of truth, with on-the-fly graph
+                building in memory and S3 event notifications for cache invalidation"
+  override    : WITH_JUSTIFICATION
+  source_ref  : [SEC:Config]
+
 EXPORT ExtendedTools:
   type        : SEED_DATA
   target      : mcp_server
   condition   : ALWAYS
-  value       : "8 MCP tools: nlspec_import, nlspec_namespaces, nlspec_slice,
+  value       : "10 MCP tools: nlspec_import, nlspec_namespaces, nlspec_slice,
                 nlspec_validate, nlspec_graph, nlspec_split, nlspec_patch_create,
-                nlspec_patch_list, nlspec_patch_absorb, nlspec_seed_resolve,
-                nlspec_seed_audit"
+                nlspec_patch_list, nlspec_patch_absorb, nlspec_drift,
+                nlspec_layer_stack, nlspec_layer_validate,
+                nlspec_substrate_query, nlspec_substrate_graph"
   override    : NEVER
   source_ref  : [SEC:API]
 
@@ -1513,12 +1890,18 @@ IMPORT glossary from nlspec/bootstrap Appendix A
 
 Additional terms:
 ```
-Namespace:      Organizational grouping for specs (e.g., "nlspec", "myproject", "org/team")
-Context Slice:  Minimal set of spec elements needed for a specific bug fix or change
-Patch:          Tracked change to a spec with lifecycle (ACTIVE -> ABSORBED/REJECTED)
-Self-Bootstrap: The system importing and managing its own specification files
-Split:          Decomposing a monolith spec into multiple specs with correct imports
-Phase:          Growth stage (0: one spec, 1: structured access, 2: multi-spec, 3: org-scale)
+Namespace:       Organizational grouping for specs (e.g., "nlspec", "myproject", "org/team")
+Context Slice:   Minimal set of spec elements needed for a specific bug fix or change
+Patch:           Tracked change to a spec with lifecycle (ACTIVE -> ABSORBED/REJECTED)
+Self-Bootstrap:  The system importing and managing its own specification files
+Split:           Decomposing a monolith spec into multiple specs with correct imports
+Phase:           Growth stage (0: one spec, 1: structured access, 2: multi-spec, 3: org-scale)
+Substrate:       A complete layer stack branching from a shared ancestor — represents a
+                 platform variant (spatial), version (temporal), or feature flag (feature)
+Branching Point: A spec in the DERIVES FROM graph with 2+ children, creating substrate divergence
+Substrate Chain: A linear L1→L4 spec path through a specific substrate — what an agent consumes
+S3+OTF:          Storage model where spec files live in S3 (source of truth) and the MCP server
+                 builds graphs on-the-fly in memory (derived index), invalidated by S3 events
 ```
 
 ---

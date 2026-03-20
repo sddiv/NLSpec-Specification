@@ -4,7 +4,7 @@
 > **Author:** Divyendu Deepak Singh
 > **Date:** February 2026
 > **Type:** SYSTEM
-> **Language Target:** TypeScript
+> **Language Target:** Python
 > **Status:** Draft
 
 ---
@@ -66,7 +66,7 @@ Build order: implement this spec first, then implement mcp-server-spec on top of
 Once both are running, `nlspec_import` both specs into the running system — the
 system then manages itself.
 
-The expected artifact is an npm package `@nlspec/server` that runs as an MCP server
+The expected artifact is a Python package `nlspec-server` that runs as an MCP server
 via stdio transport.
 
 ---
@@ -729,7 +729,7 @@ MCP TOOL: nlspec_init
   PARAMETERS:
     project_dir  : String              -- path to project root
     spec_name    : String              -- spec identifier (kebab-case)
-    language     : String | None       -- target language (default: "TypeScript")
+    language     : String | None       -- target language (default: "Python")
 
   RETURNS:
     spec         : Spec
@@ -952,28 +952,37 @@ CONFIG search:
 ## Deployment
 
 ```
-Distribution: npm package @nlspec/server
-Installation: npm install -g @nlspec/server  OR  npx @nlspec/server
+Distribution:
+  PyPI:   pip install nlspec-server              (local dev, stdio transport)
+  Docker: ghcr.io/nlspec/nlspec-server:latest    (production, SSE transport)
 
-MCP client configuration (claude_desktop_config.json):
-{
-  "mcpServers": {
-    "nlspec": {
-      "command": "npx",
-      "args": ["@nlspec/server", "--project-dir", "/path/to/project"]
+Transport:
+  stdio:  For local dev — MCP client spawns the server as a subprocess
+  SSE:    For production — server runs as a container, clients connect via HTTP
+
+Production (container, SSE):
+  docker run -p 8080:8080 -v ./specs:/specs ghcr.io/nlspec/nlspec-server:latest \
+    --transport sse --host 0.0.0.0 --port 8080 --specs-dir /specs
+
+  MCP client configuration (claude_desktop_config.json):
+  {
+    "mcpServers": {
+      "nlspec": {
+        "url": "http://localhost:8080/sse"
+      }
     }
   }
-}
 
-Claude Code configuration (.mcp.json in project root):
-{
-  "mcpServers": {
-    "nlspec": {
-      "command": "npx",
-      "args": ["@nlspec/server"]
+Local dev (stdio):
+  MCP client configuration (.mcp.json in project root):
+  {
+    "mcpServers": {
+      "nlspec": {
+        "command": "nlspec-server",
+        "args": ["--specs-dir", "./specs"]
+      }
     }
   }
-}
 ```
 
 ---
@@ -1167,26 +1176,40 @@ SCENARIO 31: External edit triggers re-index  [SEC:Functions.2] [FULL]
 ## Dependencies
 
 ```
-DEPENDENCY @modelcontextprotocol/sdk:
-  purpose: MCP server SDK (tool registration, stdio/SSE transport)
-  version: latest
+DEPENDENCY fastmcp:
+  purpose: MCP server framework (tool registration, stdio/SSE transport)
+  version: "2.0+"
   required: true
-  interface: library (TypeScript)
+  interface: library (Python)
   fallback: none
 
-DEPENDENCY better-sqlite3:
+DEPENDENCY sqlite3:
   purpose: SQLite for element index and FTS5 full-text search
-  version: "11.0+"
+  version: stdlib (Python 3.11+)
+  required: true
+  interface: stdlib
+  fallback: none
+
+DEPENDENCY networkx:
+  purpose: In-memory graph construction and traversal (DERIVES FROM, USES, substrate topology)
+  version: "3.0+"
   required: true
   interface: library
   fallback: none
 
-DEPENDENCY chokidar:
+DEPENDENCY watchfiles:
   purpose: File system watching for auto_reindex
-  version: "3.0+"
+  version: "0.21+"
   required: false (only if auto_reindex is true)
   interface: library
   fallback: poll-based checking on each request
+
+DEPENDENCY boto3:
+  purpose: S3 storage backend for cloud deployments
+  version: "1.34+"
+  required: false (only if storage.backend is "s3")
+  interface: library
+  fallback: local filesystem
 ```
 
 ---
@@ -1195,54 +1218,60 @@ DEPENDENCY chokidar:
 
 ```
 nlspec/
-├── package.json
-├── tsconfig.json
+├── pyproject.toml
 ├── README.md
 ├── specs/
 │   ├── bootstrap-spec.md            -- this file
 │   └── mcp-server-spec.md           -- extensions (imports from this spec)
 ├── CLAUDE.md
 ├── src/
-│   ├── index.ts                     -- MCP server entry point
-│   ├── cli.ts                       -- CLI entry point
-│   ├── config.ts                    -- configuration loading
-│   ├── models/
-│   │   ├── types.ts                 -- Spec, Section, SpecElement, Reference, etc.
-│   │   └── errors.ts               -- NlspecError hierarchy
-│   ├── parser/
-│   │   ├── spec-parser.ts           -- parse_spec
-│   │   ├── element-patterns.ts      -- regex patterns for element detection
-│   │   └── renderer.ts             -- render_elements
-│   ├── store/
-│   │   ├── spec-store.ts            -- store_load, CRUD operations
-│   │   ├── sqlite-index.ts          -- SQLite schema, index operations
-│   │   └── markdown-writer.ts       -- atomic markdown file updates
-│   ├── query/
-│   │   ├── query-engine.ts          -- query_search, query_references
-│   │   └── fts-setup.ts             -- FTS5 table creation and population
-│   └── mcp/
-│       ├── server.ts                -- MCP server setup
-│       └── tools/
-│           ├── init.ts              -- nlspec_init
-│           ├── get.ts               -- nlspec_get
-│           ├── list.ts              -- nlspec_list
-│           ├── search.ts            -- nlspec_search
-│           ├── create.ts            -- nlspec_create
-│           ├── update.ts            -- nlspec_update
-│           └── delete.ts            -- nlspec_delete
+│   └── nlspec_server/
+│       ├── __init__.py              -- package init
+│       ├── server.py                -- FastMCP server entry point
+│       ├── cli.py                   -- CLI entry point
+│       ├── config.py                -- configuration loading
+│       ├── models/
+│       │   ├── __init__.py
+│       │   ├── types.py             -- Spec, Section, SpecElement, Reference, etc.
+│       │   └── errors.py            -- NlspecError hierarchy
+│       ├── parser/
+│       │   ├── __init__.py
+│       │   ├── spec_parser.py       -- parse_spec
+│       │   ├── element_patterns.py  -- regex patterns for element detection
+│       │   └── renderer.py          -- render_elements
+│       ├── store/
+│       │   ├── __init__.py
+│       │   ├── spec_store.py        -- store_load, CRUD operations
+│       │   ├── sqlite_index.py      -- SQLite schema, index operations
+│       │   └── markdown_writer.py   -- atomic markdown file updates
+│       ├── query/
+│       │   ├── __init__.py
+│       │   ├── query_engine.py      -- query_search, query_references
+│       │   └── fts_setup.py         -- FTS5 table creation and population
+│       └── mcp/
+│           ├── __init__.py
+│           ├── tools/
+│           │   ├── __init__.py
+│           │   ├── init.py          -- nlspec_init
+│           │   ├── get.py           -- nlspec_get
+│           │   ├── list.py          -- nlspec_list
+│           │   ├── search.py        -- nlspec_search
+│           │   ├── create.py        -- nlspec_create
+│           │   ├── update.py        -- nlspec_update
+│           │   └── delete.py        -- nlspec_delete
 ├── tests/
 │   ├── fixtures/
 │   │   └── kv-store-spec.md         -- test fixture
 │   ├── scenarios/
-│   │   ├── scenario_01_init.test.ts
-│   │   ├── scenario_02_parse.test.ts
-│   │   ├── scenario_03_search.test.ts
-│   │   ├── scenario_04_create.test.ts
-│   │   ├── scenario_10_errors.test.ts
-│   │   ├── scenario_20_roundtrip.test.ts
-│   │   └── scenario_30_persist.test.ts
+│   │   ├── test_scenario_01_init.py
+│   │   ├── test_scenario_02_parse.py
+│   │   ├── test_scenario_03_search.py
+│   │   ├── test_scenario_04_create.py
+│   │   ├── test_scenario_10_errors.py
+│   │   ├── test_scenario_20_roundtrip.py
+│   │   └── test_scenario_30_persist.py
 │   └── smoke/
-│       └── smoke.test.ts            -- SCENARIOS 1, 2, 3
+│       └── test_smoke.py            -- SCENARIOS 1, 2, 3
 └── templates/
     └── nlspec-template.md            -- bundled template for nlspec_init
 ```
@@ -1267,30 +1296,41 @@ scenario tiers [SMOKE]/[SEC:x.x]/[FULL].
 
 ```
 ### Prerequisites
-- Node.js 20+
-- npm
+- Python 3.11+
+- uv (recommended) or pip
 
-### Build
-$ npm install
-$ npm run build
+### Install
+$ uv pip install -e ".[dev]"
 
 ### Test
-$ npm test                          # all tests
-$ npm run test:smoke                # smoke only (SCENARIOS 1, 2, 3)
+$ pytest                                    # all tests
+$ pytest tests/smoke/                       # smoke only (SCENARIOS 1, 2, 3)
+$ pytest -k "scenario_01"                   # specific scenario
 
-### Run as MCP Server
-$ npx @nlspec/server --project-dir /path/to/project
+### Run as MCP Server (local dev, stdio)
+$ nlspec-server --specs-dir ./specs
+
+### Run as MCP Server (container, SSE)
+$ docker build -t nlspec-server .
+$ docker run -p 8080:8080 -v ./specs:/specs nlspec-server \
+    --transport sse --host 0.0.0.0 --port 8080 --specs-dir /specs
 
 ### Run as CLI
-$ npx nlspec init --name myservice
-$ npx nlspec list --spec myservice --type FUNCTION
-$ npx nlspec search "Entry" --type FUNCTION
-$ npx nlspec get --spec myservice --section 5.1
+$ nlspec init --name myservice
+$ nlspec list --spec myservice --type FUNCTION
+$ nlspec search "Entry" --type FUNCTION
+$ nlspec get --spec myservice --section 5.1
 
-### Verify MCP Connection
-1. Add to claude_desktop_config.json:
-   {"mcpServers": {"nlspec": {"command": "npx", "args": ["@nlspec/server", "--project-dir", "."]}}}
-2. In Claude Desktop: "List all specs" → agent calls nlspec_list → returns results
+### Verify MCP Connection (local dev)
+1. Add to .mcp.json:
+   {"mcpServers": {"nlspec": {"command": "nlspec-server", "args": ["--specs-dir", "."]}}}
+2. In Claude Code: "List all specs" → agent calls nlspec_list → returns results
+
+### Verify MCP Connection (container)
+1. Start the container: docker run -p 8080:8080 -v ./specs:/specs nlspec-server --transport sse
+2. Add to claude_desktop_config.json:
+   {"mcpServers": {"nlspec": {"url": "http://localhost:8080/sse"}}}
+3. In Claude Desktop: "List all specs" → agent calls nlspec_list → returns results
 ```
 
 ---
