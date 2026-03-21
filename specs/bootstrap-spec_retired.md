@@ -1,3 +1,15 @@
+<!-- RETIRED SPEC
+  This is the original monolithic bootstrap spec, preserved for simple coding agents
+  that work better with a single self-contained file.
+
+  For the layered version (advanced agents, gRPC consumers):
+    mcp/phase1/L1/L1-nlspec-bootstrap-spec.md
+    mcp/phase1/L2/L2-nlspec-bootstrap-workflows-spec.md
+    mcp/phase1/L3/L3-nlspec-bootstrap-config.md
+
+  Both versions describe the same system. Use whichever suits your agent.
+-->
+
 # nlspec Bootstrap — Natural Language Specification
 
 > **Version:** 0.1.0
@@ -101,12 +113,14 @@ while keeping human-readable markdown as the source of truth.
 ## Architecture Overview
 
 ```
-+-----------------------------------------------------------+
-|                    MCP Clients                             |
-|  (Claude Code, Cursor, Claude Desktop, any MCP client)    |
-+---------------------------+-------------------------------+
-                            | MCP Protocol (stdio)
-                            v
++----------------------------+  +----------------------------+
+|       MCP Clients          |  |    gRPC Consumers      |
+| (Claude Code, Cursor,     |  |    (internal consumer)     |
+|  Claude Desktop)           |  |                            |
++-------------+--------------+  +-------------+--------------+
+              |                               |
+              | MCP (stdio / SSE)             | gRPC (:50060)
+              v                               v
 +-----------------------------------------------------------+
 |                   nlspec MCP Server                        |
 |                                                            |
@@ -128,14 +142,18 @@ while keeping human-readable markdown as the source of truth.
 |            |  +----------------+  |                        |
 |            |  +----------------+  |                        |
 |            |  | Query Engine   |  | Text + structural      |
-|            |  +----------------+  | search                 |
+|            |  +----------------+  | search (FTS5)          |
 |            |                      |                        |
 |            +----------+-----------+                        |
 |                       |                                    |
 |            +----------v-----------+                        |
-|            |  Persistence         |                        |
-|            |  - .md files (truth) |                        |
-|            |  - SQLite (index)    |                        |
+|            |  Persistence          |                        |
+|            |  Source of truth:      |                        |
+|            |  - .md files in git    |                        |
+|            |  Index:                |                        |
+|            |  - PostgreSQL          |                        |
+|            |    (elements + FTS)    |                        |
+|            |  Versioning: git       |                        |
 |            +----------------------+                        |
 +-----------------------------------------------------------+
 ```
@@ -143,11 +161,19 @@ while keeping human-readable markdown as the source of truth.
 ### Architecture.1 Component Inventory
 
 ### Component: MCP Server
-- **Responsibility:** Expose nlspec operations as MCP tools
-- **Owns:** MCP transport (stdio), tool registration, request routing
+- **Responsibility:** Expose nlspec operations as MCP tools for coding agents
+- **Owns:** MCP transport (stdio local / SSE container), tool registration, request routing
 - **Calls:** Core Engine
-- **Called by:** MCP clients
-- **Lifecycle:** Started as subprocess by MCP client, runs for session duration
+- **Called by:** MCP clients (Claude Desktop, Claude Code, Cursor, etc.)
+- **Lifecycle:** Started as subprocess by MCP client (stdio) or as container (SSE)
+
+### Component: gRPC Server
+- **Responsibility:** Expose nlspec operations as gRPC services for programmatic consumers
+- **Owns:** gRPC transport on port 50060, service registration
+- **Calls:** Core Engine (same functions as MCP tools)
+- **Called by:** programmatic consumers (high-throughput spec queries, graph traversal)
+- **Lifecycle:** Runs alongside MCP server in the same process. Both share the in-memory SQLite index.
+- **Why gRPC alongside MCP:** Programmatic consumers need high-throughput spec queries (element lookups, graph walks, version checks). gRPC's binary serialization and streaming are faster than MCP/SSE for bulk internal traffic. MCP remains for interactive agent use.
 
 ### Component: Spec Parser
 - **Responsibility:** Parse nlspec markdown into structured SpecElement tree
@@ -157,15 +183,15 @@ while keeping human-readable markdown as the source of truth.
 - **Lifecycle:** Stateless, invoked per parse
 
 ### Component: Spec Store
-- **Responsibility:** CRUD operations on SpecElements, persistence to markdown + SQLite
-- **Owns:** The SpecElement collection, SQLite index, markdown files
-- **Calls:** Spec Parser (to parse on load), filesystem
+- **Responsibility:** CRUD operations on SpecElements, indexing to PostgreSQL from git-managed markdown
+- **Owns:** The SpecElement collection, PostgreSQL index tables, markdown files (source of truth, versioned by git)
+- **Calls:** Spec Parser (to parse on load), filesystem (to read/write .md files), git (for version info), PostgreSQL (via Connection Manager)
 - **Called by:** Core Engine
-- **Lifecycle:** Initialized on server start, persists across requests
+- **Lifecycle:** On startup, parses .md files and upserts into PostgreSQL. Shared database — nlspec tables can live in the same PostgreSQL instance as consuming applications. Full-text search via PostgreSQL tsvector/tsquery + pg_trgm. Element version hashes derived from content SHA-256. File-level versioning from git commit history.
 
 ### Component: Query Engine
 - **Responsibility:** Search across SpecElements by type, tag, text, reference
-- **Owns:** Query logic, FTS5 index
+- **Owns:** Query logic, PostgreSQL full-text search (tsvector/tsquery + pg_trgm)
 - **Calls:** Spec Store (to read elements)
 - **Called by:** Core Engine
 - **Lifecycle:** Stateless per query
@@ -175,7 +201,7 @@ while keeping human-readable markdown as the source of truth.
 ### Flow: Agent reads a FUNCTION
 1. Agent calls `nlspec_get({spec_id: "kv-store", section: "Functions.1"})`
 2. MCP Server routes to Core Engine
-3. Core Engine calls Spec Store → SQLite lookup → returns Functions.1
+3. Core Engine calls Spec Store → in-memory SQLite lookup → returns Functions.1
 4. Returns structured JSON with all FUNCTIONs in that section
 
 Latency budget: < 50ms

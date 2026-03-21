@@ -1,3 +1,16 @@
+<!-- RETIRED SPEC
+  This is the original monolithic extended MCP server spec, preserved for simple
+  coding agents that work better with a single self-contained file.
+
+  For the layered version (advanced agents, gRPC consumers):
+    mcp/phase2/L1/L1-nlspec-extended-spec.md
+    mcp/phase2/L2/L2-nlspec-extended-workflows-spec.md
+    mcp/phase2/L3/L3-nlspec-extended-config.md
+    mcp/phase2/L4/L4-nlspec-seed-spec.md
+
+  Both versions describe the same system. Use whichever suits your agent.
+-->
+
 # nlspec MCP Server — Natural Language Specification
 
 > **Version:** 0.1.0
@@ -93,14 +106,16 @@ it back.
 ## Architecture Overview
 
 ```
++----------------------------+  +----------------------------+
+|       MCP Clients          |  |    gRPC Consumers      |
+| (Claude Code, Cursor,     |  |    (internal consumer)     |
+|  Claude Desktop)           |  |                            |
++-------------+--------------+  +-------------+--------------+
+              |                               |
+              | MCP (stdio / SSE)             | gRPC (:50060)
+              v                               v
 +-----------------------------------------------------------+
-|                    MCP Clients                             |
-|  (Claude Code, Cursor, Claude Desktop, any MCP client)    |
-+---------------------------+-------------------------------+
-                            | MCP Protocol (stdio)
-                            v
-+-----------------------------------------------------------+
-|                   nlspec MCP Server                        |
+|                   nlspec Server                            |
 |                                                            |
 |  +-----------+  +------------+  +-------------+           |
 |  | Bootstrap |  | Advanced   |  | Namespace   |           |
@@ -127,15 +142,16 @@ it back.
 |    +----------+-----------+                                |
 |               |                                            |
 |    +----------v-----------+                                |
-|    |  Persistence (S3+OTF)|                                |
-|    |  Source of truth:     |                                |
-|    |  - .md files          |                                |
-|    |    (local or S3)      |                                |
-|    |  Derived indices:     |                                |
-|    |  - SQLite (elements)  |                                |
-|    |  - In-memory graph    |                                |
-|    |    (substrates)       |                                |
-|    |  - patches/ dir       |                                |
+|    |  Persistence           |                                |
+|    |  Source of truth:       |                                |
+|    |  - .md files in git     |                                |
+|    |  - patches/ dir (git)   |                                |
+|    |  Index (shared DB):     |                                |
+|    |  - PostgreSQL            |                                |
+|    |    (elements + FTS)     |                                |
+|    |  - NetworkX in-memory   |                                |
+|    |    (substrates, cached) |                                |
+|    |  Versioning: git        |                                |
 |    +----------------------+                                |
 +-----------------------------------------------------------+
 ```
@@ -1270,7 +1286,7 @@ MCP TOOL: nlspec_substrate_graph
   - With include_cross=true, each substrate's cross_substrate field is populated
     with specs from other substrates that IMPORT from it
   - A namespace with no branching returns a single-substrate graph (the trivial case)
-  - Used by L2Mify's 3D visualization and other UI tools, not typically by coding agents
+  - Used by visualization tools and UI consumers, not typically by coding agents
     (coding agents use nlspec_substrate_query for a specific chain)
 ```
 
