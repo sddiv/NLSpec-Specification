@@ -49,8 +49,8 @@ The system spans two phases:
 - **Drift Detection:** Compare spec against code
 - **gRPC Interface:** Alternative to MCP (port 50060) for internal tools
 - **PostgreSQL Shared Database:** Support multi-instance deployments
-- **13 additional MCP Tools:** Import, namespaces, slice, patch, validate, graph, split, drift, layer, substrate query, substrate graph
-- **20 total tools** (8 Phase 1 + 13 Phase 2)
+- **14 additional MCP Tools:** Import, namespaces, slice, patch (create/list/absorb), diff, validate, graph, split, drift, layer, substrate query, substrate graph
+- **21 total tools** (8 Phase 1 + 14 Phase 2)
 
 This spec defines all records, functions, tools, and errors for both phases in a single unified contract.
 
@@ -372,8 +372,99 @@ RECORD Patch
     version_before: String          -- spec version before absorption
     version_after: String           -- spec version after absorption
 
-  USED BY: nlspec_patch_create, nlspec_patch_list, nlspec_patch_absorb
+  USED BY: nlspec_patch_create, nlspec_patch_list, nlspec_patch_absorb, nlspec_diff_since
   USES: PatchCategory, PatchStatus
+```
+
+### RECORD: StructuredDiff
+
+Represents the structured difference between two versions of a spec, at element granularity with sub-element classification (Phase 2).
+
+```
+RECORD StructuredDiff
+  FIELDS:
+    spec_id: String                 -- which spec was diffed
+    namespace: String               -- namespace of the spec
+    from_version: String            -- starting version (e.g., "0.1.0")
+    to_version: String              -- ending version (e.g., "0.2.0")
+    changes: ElementChange[]        -- list of element-level changes
+    patches_included: String[]      -- patch IDs absorbed between from_version and to_version
+    diffed_at: Timestamp
+
+  USED BY: nlspec_diff_since, diff_since
+  USES: ElementChange
+
+  INVARIANTS:
+  - from_version < to_version (semver ordering)
+  - changes is never empty (if versions differ, something changed)
+  - patches_included lists only ABSORBED patches between the two versions
+```
+
+### RECORD: ElementChange
+
+A single element-level change within a StructuredDiff (Phase 2).
+
+```
+RECORD ElementChange
+  FIELDS:
+    element_id: String              -- fully qualified: namespace/spec_id:section:type:name
+    element_name: String            -- human-readable name (e.g., "validate_order")
+    element_type: ElementType       -- RECORD, FUNCTION, SCENARIO, etc.
+    section: String                 -- parent section (e.g., "Functions.3")
+    change_type: ChangeType         -- MODIFIED, ADDED, REMOVED
+    sub_changes: SubChange[]        -- what specifically changed within the element
+    impact: ChangeImpact            -- how this affects dependent elements
+    hash_before: String | None      -- content hash before (None if ADDED)
+    hash_after: String | None       -- content hash after (None if REMOVED)
+    patch_ids: String[]             -- which patches caused this change (may be empty for direct edits)
+
+  USED BY: StructuredDiff, nlspec_diff_since
+  USES: ElementType, ChangeType, SubChange, ChangeImpact
+
+  INVARIANTS:
+  - hash_before is None iff change_type == ADDED
+  - hash_after is None iff change_type == REMOVED
+  - sub_changes is not empty for MODIFIED elements
+  - sub_changes is empty for ADDED and REMOVED elements
+```
+
+### ENUM: ChangeType
+
+```
+ENUM ChangeType
+  MODIFIED                          -- element exists in both versions, content differs
+  ADDED                             -- element is new in to_version
+  REMOVED                           -- element was deleted in to_version
+```
+
+### ENUM: SubChange
+
+Classifies what specifically changed within a MODIFIED element (Phase 2).
+
+```
+ENUM SubChange
+  SIGNATURE                         -- function params or return type changed
+  PRECONDITIONS                     -- preconditions added/modified/removed
+  POSTCONDITIONS                    -- postconditions changed
+  DATA_FIELDS                       -- record fields added/modified/removed
+  INVARIANTS                        -- invariant constraints changed
+  ERROR_CASES                       -- error conditions or throws changed
+  BEHAVIOR                          -- function behavior steps changed (logic change)
+  SCENARIOS                         -- scenario steps or assertions changed
+  REFERENCES                        -- USES/THROWS/USED_BY declarations changed
+  METADATA                          -- non-functional: notes, performance targets, descriptions
+```
+
+### ENUM: ChangeImpact
+
+Classifies how a change affects elements that depend on the changed element (Phase 2).
+
+```
+ENUM ChangeImpact
+  INTERFACE_BREAKING                -- callers must change (signature, required data field, removed export)
+  LOGIC_ONLY                        -- same interface, different internal behavior (preconditions, behavior steps)
+  ADDITIVE                          -- new capability, no breakage (new optional field, new function, new scenario)
+  REMOVAL                           -- element deleted, all references must be updated
 ```
 
 ### RECORD: ValidationResult
@@ -1092,19 +1183,124 @@ FUNCTION patch_absorb
     patch_id: String
 
   OUTPUT:
-    Patch                           -- with status=ABSORBED
+    Patch                           -- with status=ABSORBED (returned before deletion)
 
   WORKFLOW:
     1. Load patch
-    2. Update spec: apply patch content (typically by updating relevant elements)
+    2. Verify patch content is already reflected in spec body:
+       a. The spec element content should already include the patch changes
+          (patches are applied to the spec body when created/activated, NOT at absorption time)
+       b. If spec body does NOT reflect the patch: apply patch content now (backward compat)
     3. Increment spec version (patch: 0.1.0 → 0.1.1, minor: 0.1.0 → 0.2.0)
     4. UPDATE Patch: status=ABSORBED, absorbed_at=NOW()
-    5. git commit (if git enabled)
-    6. Return updated Patch
+    5. DELETE Patch from spec's Patches section:
+       a. Remove the Patch record from the in-memory store
+       b. Remove the patch block from the spec's markdown Patches section (if present)
+       c. The spec body retains the patch's changes — only the Patch metadata is deleted
+    6. git commit (if git enabled) with message: "absorb(PATCH-{id}): {description}"
+    7. Return the Patch record (snapshot before deletion, for caller confirmation)
+
+  POSTCONDITIONS:
+    - Spec body unchanged (already contained patch content)
+    - Spec version bumped
+    - Patch record no longer exists in store or spec file
+    - nlspec_patch_list for this spec will no longer include this patch
+    - nlspec_diff_since will still show the element changes between historical versions
+      (diff is computed from spec history, not from patch records)
 
   THROWS:
     PatchNotFound
     SpecNotFound
+
+  NOTES:
+    - Absorption is the END of a patch's lifecycle. After this call, the patch
+      is gone. The spec IS the canonical state — no patch metadata remains.
+    - The caller (BuildPlanner.commit_unit) is responsible for ensuring all
+      affected artifacts are committed BEFORE calling patch_absorb.
+    - Historical diffs remain available: nlspec_diff_since("0.1.0") will still
+      show what changed between versions, even though the patch record is deleted.
+      This is because diff is computed from spec content snapshots, not patch records.
+```
+
+### FUNCTION: diff_since
+
+Compute a structured diff between two versions of a spec at element granularity (Phase 2).
+
+```
+FUNCTION diff_since
+  INPUT:
+    namespace: String
+    spec_id: String
+    since_version: String           -- the version to diff FROM (e.g., "0.1.0")
+
+  OUTPUT:
+    StructuredDiff                  -- element-level changes with sub-change classification
+
+  WORKFLOW:
+    1. Load current spec version (to_version)
+    2. If since_version == to_version: return empty StructuredDiff (no changes)
+    3. Load spec snapshot at since_version:
+       a. If git enabled: retrieve spec file at the git commit tagged with since_version
+       b. If git not enabled: retrieve from version history table in database
+    4. Parse both versions into SpecElement lists using parse_spec
+    5. Build element index for both versions:
+       a. Key = (section, element_type, element_name)
+       b. Value = SpecElement with content hash
+    6. Compute element-level diff:
+       a. Elements in to_version but not in since_version: change_type = ADDED
+       b. Elements in since_version but not in to_version: change_type = REMOVED
+       c. Elements in both but hash differs: change_type = MODIFIED
+       d. Elements in both with same hash: skip (unchanged)
+    7. For each MODIFIED element, compute sub_changes:
+       a. Parse element content into structural parts:
+          - For FUNCTION: extract signature (name, params, return), PRECONDITIONS, POSTCONDITIONS,
+            BEHAVIOR, ERRORS, USES, THROWS
+          - For RECORD: extract field list, INVARIANTS, USED BY
+          - For SCENARIO: extract GIVEN, WHEN, THEN, tags
+          - For ENUM: extract variant list
+       b. Compare each structural part between versions
+       c. Map changed parts to SubChange enum values:
+          - Params/return changed → SIGNATURE
+          - PRECONDITIONS section differs → PRECONDITIONS
+          - POSTCONDITIONS section differs → POSTCONDITIONS
+          - Field list differs → DATA_FIELDS
+          - INVARIANTS section differs → INVARIANTS
+          - ERRORS/THROWS changed → ERROR_CASES
+          - BEHAVIOR steps changed → BEHAVIOR
+          - GIVEN/WHEN/THEN changed → SCENARIOS
+          - USES/THROWS/USED_BY declarations changed → REFERENCES
+          - NOTES/PERFORMANCE/description changed → METADATA
+    8. For each ElementChange, classify impact:
+       a. ADDED elements: impact = ADDITIVE
+       b. REMOVED elements: impact = REMOVAL
+       c. MODIFIED elements:
+          - If sub_changes contains SIGNATURE or DATA_FIELDS (required field added/removed):
+            impact = INTERFACE_BREAKING
+          - Else if sub_changes contains only PRECONDITIONS, POSTCONDITIONS, BEHAVIOR, ERROR_CASES:
+            impact = LOGIC_ONLY
+          - Else if sub_changes contains only DATA_FIELDS (optional field added) or METADATA:
+            impact = ADDITIVE
+          - Else: impact = LOGIC_ONLY (conservative default for ambiguous cases)
+    9. Collect absorbed patches between since_version and to_version:
+       a. Query patches where status=ABSORBED and version_after > since_version
+       b. Set patches_included = matching patch IDs
+       c. For each ElementChange, set patch_ids from patches whose sections overlap
+    10. Return StructuredDiff
+
+  THROWS:
+    SpecNotFound
+    VersionNotFound                 -- since_version doesn't exist in history
+
+  LATENCY: < 500ms for specs with < 200 elements
+
+  NOTES:
+  - Content hashing uses SHA-256 of the element's raw markdown content (trimmed, normalized whitespace)
+  - This function is the bridge between nlspec (what changed in the spec) and l2mify (what to rebuild)
+  - The impact classification is conservative: when ambiguous, it chooses the higher-impact classification
+    to avoid under-rebuilding
+  - Sub-element parsing reuses the same parse_spec infrastructure used for indexing
+  - METADATA-only changes (notes, performance targets) still appear in the diff but with ADDITIVE impact,
+    signaling that they're informational and don't require artifact changes
 ```
 
 ### FUNCTION: spec_validate
@@ -1682,6 +1878,51 @@ TOOL nlspec_patch_absorb
   THROWS: PatchNotFound
 ```
 
+### TOOL: nlspec_diff_since
+
+Compute a structured diff between a historical version and the current version of a spec (Phase 2).
+
+```
+TOOL nlspec_diff_since
+  INPUT:
+    namespace: String
+    spec_id: String
+    since_version: String           -- version to diff FROM
+
+  OUTPUT:
+    {
+      spec_id: String
+      from_version: String
+      to_version: String
+      changes: [
+        {
+          element_id: String
+          element_name: String
+          element_type: String      -- "RECORD", "FUNCTION", etc.
+          section: String
+          change_type: String       -- "MODIFIED", "ADDED", "REMOVED"
+          sub_changes: String[]     -- ["SIGNATURE", "BEHAVIOR", etc.]
+          impact: String            -- "INTERFACE_BREAKING", "LOGIC_ONLY", "ADDITIVE", "REMOVAL"
+          hash_before: String | None
+          hash_after: String | None
+          patch_ids: String[]
+        }
+      ]
+      patches_included: String[]
+      diffed_at: Timestamp
+    }
+
+  DESCRIPTION:
+    Compute element-level structured diff between since_version and current version.
+    Each change includes sub-element classification (what specifically changed within
+    a FUNCTION or RECORD) and impact classification (whether callers need to change).
+    This is the primary integration point for build planners that need to know precisely
+    what changed in a spec to determine the minimal set of artifacts to rebuild.
+
+  USES: diff_since
+  THROWS: SpecNotFound, VersionNotFound
+```
+
 ### TOOL: nlspec_validate
 
 Validate a spec for structural correctness (Phase 2).
@@ -2031,6 +2272,18 @@ ERROR BrokenImport
 ERROR PatchNotFound
   STATUS: 404
   MESSAGE: "Patch not found: {patch_id}"
+```
+
+### ERROR: VersionNotFound
+
+```
+ERROR VersionNotFound
+  STATUS: 404
+  MESSAGE: "Version not found for {spec_id}: {version}"
+  CONTEXT:
+    - spec_id: the spec whose version history was queried
+    - version: the version that was requested
+    - available_versions: String[]  -- versions that exist in history
 ```
 
 ### ERROR: SubstrateNotFound

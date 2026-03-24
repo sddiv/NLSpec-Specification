@@ -130,6 +130,7 @@ nlspec_split({namespace: "myproject", spec_id: "monolith", strategy: "cluster"})
 | Config | Every knob: type, default, env var, validation |
 | SystemManifest | Platform composition, hardware, kernels, environment configs |
 | Deployment | Container images, K8s manifests, PIPELINE definitions |
+| UXSpec | Scenes, transitions, view hierarchy, visual verification, UX test scenarios |
 | Scenarios | End-to-end behavioral tests (the holdout set) |
 | Dependencies | External systems, libraries, and asset packs with pinned versions and verify-after-install rules |
 | FileStructure | Expected directory layout |
@@ -169,8 +170,20 @@ define reusable architectural blueprints — consumed via `USES PATTERN:` in
 Architecture.3. ASSET specs catalog static resources that already exist in the
 workspace (images, CSS, fonts, tokens) and define the style guide (RULEs and
 TOKENs) that agents must follow when writing code — consumed via `USES ASSET:`.
-The agent applies prior art patterns from training knowledge and reads full specs
-for novel patterns and assets.
+ASSET specs with a COMPONENT_CATALOG section serve as design system registrations
+for UI rendering. The agent applies prior art patterns from training knowledge and
+reads full specs for novel patterns and assets.
+
+**UX specifications.** The optional UXSpec section defines frontend UX as structured,
+verifiable elements — not mockups or wireframes. SCENEs compose design system
+components with layout, responsive rules, data bindings, z-layer stacking, and
+overlays. TRANSITIONs define navigation between scenes with animation. View
+hierarchy rules govern z-index layering and focus trapping. Visual verification
+runs three layers: structural DOM checks, token compliance (computed style vs design
+tokens), and AI-assisted visual regression. UX test scenarios drive headless
+browsers through complete user flows with NAVIGATE and VISUAL assertions. This
+approach eliminates the need for Figma or separate design tools — the spec IS
+the design, and it's machine-verifiable.
 
 **Two-dimensional spec composition (optional).** Vertical (DERIVES FROM across layers)
 + horizontal (COMPOSES WITH at the same layer). See below.
@@ -321,6 +334,7 @@ idea into a complete specification for organizational-scale AI development.
 | **Decomposition** | Manual | Manual | Manual | `nlspec_split` analyzes and decomposes specs |
 | **Autonomous exec** | None | None | None | Dark factory mode: self-driving pipeline with retry, escalation, artifact verification |
 | **Composition** | None | None | None | 3D: vertical (4-layer derivation) + horizontal (same-layer peers) + substrate branching (platforms, versions, features) |
+| **UX specification** | None | None | None | SCENEs, TRANSITIONs, visual verification, UX scenarios — design is spec, not mockup |
 | **Self-describing** | No | No | No | Yes — the spec for nlspec is itself an nlspec |
 
 ## Why This Will Be the Norm

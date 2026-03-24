@@ -116,9 +116,19 @@ configuration, no hidden defaults, no "works on my machine."
 **Spec types:** Not all specs produce running code. A TYPE: PATTERN spec defines
 a reusable architectural blueprint (e.g., a context stack pattern). A TYPE: ASSET
 spec defines static resources and design constraints (e.g., a design system with
-color tokens and typography rules). SYSTEM specs reference these via USES PATTERN
-and USES ASSET in Architecture.3. The agent applies patterns from training knowledge
-for well-known patterns, or reads the full PATTERN spec for novel ones.
+color tokens and typography rules). ASSET specs with a COMPONENT_CATALOG section
+serve as design system registrations for UI rendering and verification. SYSTEM specs
+reference these via USES PATTERN and USES ASSET in Architecture.3. The agent applies
+patterns from training knowledge for well-known patterns, or reads the full PATTERN
+spec for novel ones.
+
+**UX specifications:** SYSTEM specs can include an optional UXSpec section that defines
+frontend UX as structured, verifiable elements. SCENEs compose design system components
+with layout, responsive rules, data bindings, and z-layer stacking. TRANSITIONs define
+navigation between scenes. Visual verification checks rendered output against the spec
+at three layers: structural DOM, design token compliance, and AI visual regression.
+UX test scenarios execute in headless browsers. This makes UX development spec-driven
+and machine-verifiable — no wireframes, no Figma, no vibe coding.
 
 ```
 nlspec_import({namespace: "myproject", spec_id: "auth", path: "specs/auth-spec.md"})

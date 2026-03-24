@@ -953,6 +953,420 @@ SCENARIO 30: {Boundary condition}
 
 ---
 
+## UXSpec
+
+**Scene and transition definitions for user-facing frontends.** This section is used by
+SYSTEM specs that have a UI layer. It defines what the user sees (scenes), how they
+navigate between views (transitions), and how visual correctness is verified.
+
+UXSpec is design-system-agnostic. It references components from a registered design system
+(declared via `USES ASSET: {DesignSystem} FROM {spec.md}`). The design system provides
+the component catalog — UXSpec composes those components into scenes. Any design system
+that exports a COMPONENT_CATALOG can be used: l2mflare, Material 3 generators, Shadcn,
+custom systems.
+
+**When to use UXSpec:** Any spec that declares screens, views, or user-facing workflows.
+If the spec has a frontend, it should have a UXSpec section.
+
+### UXSpec.1 Design System Binding
+
+Declare which design system(s) this spec uses. The design system must be a TYPE: ASSET
+spec with a COMPONENT_CATALOG section.
+
+```
+USES ASSET: {DesignSystemName} FROM {design-system-spec.md}
+```
+
+The ASSET spec's COMPONENT_CATALOG section defines each available component:
+
+```
+COMPONENT {ComponentName}:
+  category     : {layout | input | display | navigation | feedback | overlay}
+  description  : {what this component does}
+  props:
+    {prop_name} : {Type}                -- {description}
+    {prop_name} : {Type} = {default}    -- {description}, with default
+    {prop_name} : {Type} | None         -- {description}, optional
+  variants:
+    {variant_name} : {description of when to use}
+  slots:
+    {slot_name} : {what goes here — e.g., "children", "header", "footer"}
+  states:
+    default     : {base appearance}
+    hover       : {hover state}
+    focused     : {focus state}
+    disabled    : {disabled state}
+    active      : {active/selected state}
+  tokens:
+    {which design tokens this component uses — e.g., "color-primary, shape-md, elevation-level-1"}
+
+COMPONENT ActionButton:
+  category     : input
+  description  : Workflow-initiating button with trailing arrow icon
+  props:
+    color       : "primary" | "secondary" | "tertiary" = "primary"
+    size        : "lg" | "md" | "sm" = "md"
+    outlined    : Boolean = false
+    hideArrow   : Boolean = false
+    disabled    : Boolean = false
+    label       : String
+    onClick     : Function
+  variants:
+    filled      : solid background, white text (default)
+    outlined    : border only, colored text
+  slots:
+    children    : button label text
+  states:
+    default     : filled/outlined per variant
+    hover       : 8% opacity overlay
+    focused     : 2px primary outline
+    disabled    : 38% opacity, no interaction
+  tokens:
+    color-primary, color-secondary, color-tertiary, shape-action-md, elevation-level-0
+```
+
+### UXSpec.2 Scenes
+
+A SCENE is a viewport-filling composition of components — the equivalent of a
+UIViewController (iOS), Activity (Android), or a route-level page component (web).
+Each scene declares which components it uses, how they're laid out, and how they
+respond to viewport changes.
+
+```
+SCENE {SceneName}:
+  DESCRIPTION: {what the user sees and does on this scene}
+  VIEWPORT: full | modal({width}x{height}) | drawer({width})
+
+  LAYOUT:
+    type        : {grid | flex | stack}
+    {layout-specific properties — columns, rows, direction, gap, padding}
+
+  RESPONSIVE:
+    {breakpoint_condition}:
+      {layout overrides — column changes, hidden elements, stacking changes}
+
+  COMPONENTS:
+    {slot_name}: {ComponentName}({prop overrides})
+      {nested components — child slots}
+
+  DATA_BINDINGS:
+    {component.prop} ← {data source — API endpoint, local state, parent prop}
+
+  Z_LAYERS:
+    base ({z}):    {what lives at this layer}
+    sticky ({z}):  {pinned elements}
+    overlay ({z}): {modals, dropdowns}
+    toast ({z}):   {notifications}
+
+  OVERLAYS:
+    {OverlayName}:
+      TRIGGER: {what causes it to appear}
+      TYPE: modal | drawer | dropdown | tooltip | toast
+      BACKDROP: {CSS value or "none"}
+      CONTENT: {component tree}
+      DISMISS: {how to close it}
+```
+
+Example:
+
+```
+SCENE Dashboard:
+  DESCRIPTION: Main landing screen. Shows active sessions, system health, and quick actions.
+  VIEWPORT: full
+
+  LAYOUT:
+    type: grid
+    columns: [sidebar, main]
+    rows: [1fr]
+
+  RESPONSIVE:
+    >= 1024px:
+      columns: [240px, 1fr]
+    < 1024px:
+      columns: [1fr]
+      sidebar: hidden
+      OVERLAY nav-drawer added (Sidebar content in drawer)
+
+  COMPONENTS:
+    sidebar: Sidebar(width="default")
+      SidebarHeader(title="L2Mify")
+      SidebarSection(title="NAVIGATION")
+        SidebarItem(icon="dashboard", label="Dashboard", active=true)
+        SidebarItem(icon="science", label="Mock", badge={active_mock_count})
+        SidebarItem(icon="build", label="Build")
+      SidebarDivider
+      SidebarSection(title="TOOLS")
+        SidebarItem(icon="hub", label="Component Graph")
+        SidebarItem(icon="database", label="Knowledge Graph")
+      SidebarFooter
+        SidebarItem(icon="settings", label="Settings")
+
+    main:
+      LAYOUT: grid, rows: [header 64px, content 1fr]
+
+      header:
+        LAYOUT: flex, justify: space-between, align: center, padding: 16px 24px
+        Title(text="Dashboard", style=headline-medium)
+        ActionButton(color="primary", size="md", label="New Mock")
+
+      content:
+        LAYOUT: grid, columns: [1fr 1fr 1fr], gap: 16px, padding: 24px
+        RESPONSIVE:
+          < 768px: columns: [1fr]
+
+        sessions-card: Card(variant="outlined")
+          CardHeader(icon="science", title="Active Sessions")
+          CardBody: Text({active_session_count} + " running")
+          CardFooter(info={session_summary})
+
+        components-card: Card(variant="elevated")
+          CardHeader(icon="hub", title="Components")
+          CardBody: Text({spec_count} + " specs")
+
+        build-card: Card(variant="tinted-primary")
+          CardHeader(icon="build", title="Last Build")
+          CardBody: Text({last_build_status})
+          CardFooter: ActionButton(size="sm", label="View")
+
+  DATA_BINDINGS:
+    active_mock_count    ← GET /api/v1/status → active_sessions.count
+    active_session_count ← GET /api/v1/status → active_sessions.count
+    session_summary      ← GET /api/v1/status → active_sessions.summary
+    spec_count           ← GET /api/v1/status → specs.count
+    last_build_status    ← GET /api/v1/build/latest → status
+
+  Z_LAYERS:
+    base (0): sidebar, main
+    toast (200): notification toasts
+
+  OVERLAYS:
+    nav-drawer:
+      TRIGGER: hamburger-icon.onClick (visible only < 1024px)
+      TYPE: drawer
+      BACKDROP: rgba(0,0,0,0.5)
+      CONTENT: Sidebar(width="wide") -- same sidebar content
+      DISMISS: backdrop.onClick OR swipe-left OR SidebarItem.onClick
+```
+
+### UXSpec.3 Transitions
+
+Transitions define navigation between scenes. Each transition specifies a trigger,
+animation, and navigation mode. This is the equivalent of UINavigationController
+push/present (iOS), NavController navigate (Android), or React Router route changes.
+
+```
+TRANSITION {SourceScene} → {TargetScene}:
+  TRIGGER:      {component}.{event} [WHERE {guard_condition}]
+  ANIMATION:    {animation_type}, duration: {ms}, easing: {easing}
+  NAVIGATION:   {push | replace | modal | drawer}
+  PARAMS:       {data passed to target scene — e.g., session_id, namespace_id}
+  BACK:         {how to return — "pop" | "dismiss" | "none"}
+```
+
+Animation types:
+- `push-right`: slide in from right (iOS push equivalent)
+- `push-left`: slide in from left (back navigation)
+- `modal-slide-up`: slide up from bottom
+- `modal-fade`: fade in with scale
+- `fade-cross`: crossfade (content swap within persistent shell)
+- `drawer-slide`: slide from left/right edge
+- `none`: instant swap
+
+Navigation modes:
+- `push`: adds to navigation stack (back button appears)
+- `replace`: replaces current scene (no back, used for content swap within shell)
+- `modal`: overlays current scene (dismiss returns to previous)
+- `drawer`: slides in from edge (dismiss returns to previous)
+
+Example:
+
+```
+TRANSITION Dashboard → MockCreator:
+  TRIGGER:      ActionButton("New Mock").onClick
+  ANIMATION:    push-right, duration: 300ms, easing: standard
+  NAVIGATION:   push
+  PARAMS:       none
+  BACK:         pop (push-left animation)
+
+TRANSITION MockInteraction → CacheReview:
+  TRIGGER:      end_session.response WHERE cache_entries_count > 0
+  ANIMATION:    modal-slide-up, duration: 300ms, easing: standard
+  NAVIGATION:   modal
+  PARAMS:       { session_id }
+  BACK:         none (must complete review before dismissing)
+
+TRANSITION Dashboard → BuildMonitor:
+  TRIGGER:      SidebarItem("Build").onClick
+  ANIMATION:    fade-cross, duration: 200ms, easing: standard
+  NAVIGATION:   replace
+  PARAMS:       { namespace_id }
+  BACK:         replace (fade-cross back to Dashboard)
+```
+
+### UXSpec.4 View Hierarchy
+
+The default view hierarchy for a scene is flat — all components at z-index 0.
+Deviations are declared in Z_LAYERS (within SCENE) and OVERLAYS. The view hierarchy
+determines paint order, event propagation, and keyboard focus trapping.
+
+Rules:
+- **base (z: 0)**: main scene content, receives events normally
+- **sticky (z: 10-49)**: pinned headers, toolbars — scroll beneath but above base
+- **dropdown (z: 50-99)**: dropdowns, popovers — dismiss on outside click
+- **overlay (z: 100-149)**: modals, drawers — trap focus, backdrop blocks base
+- **toast (z: 200+)**: notifications — no focus trap, auto-dismiss
+- Higher z-index layers capture events before lower layers
+- Modal overlays trap keyboard focus (Tab cycles within overlay only)
+- Multiple overlays stack (nested modals) — each pushes to overlay stack
+
+### UXSpec.5 Visual Verification
+
+Visual verification runs after a frontend BuildUnit is built. It validates that the
+rendered output matches the SCENE spec. Three verification layers, run in order:
+
+**Layer A — Structural Verification (deterministic, no AI):**
+```
+VISUAL_CHECK structural:
+  FOR EACH scene IN spec.scenes:
+    1. Render scene in headless browser at default viewport
+    2. Query DOM for each COMPONENT declared in scene:
+       - ASSERT component exists in DOM
+       - ASSERT component has correct variant class/attribute
+       - ASSERT component props match spec (color, size, label text)
+    3. Query layout:
+       - ASSERT layout type matches (grid columns count, flex direction)
+       - ASSERT responsive: render at each declared breakpoint,
+         verify layout changes (columns collapse, elements hide/show)
+    4. Query z-index:
+       - ASSERT z-index values match Z_LAYERS declaration
+       - Trigger each OVERLAY, verify it appears at correct z-layer
+    5. Query data bindings:
+       - ASSERT bound data renders in correct components
+       - Mock API returns test data, verify it propagates to UI
+```
+
+**Layer B — Token Compliance (deterministic, no AI):**
+```
+VISUAL_CHECK tokens:
+  FOR EACH component IN rendered_scene:
+    1. Get computed styles via getComputedStyle()
+    2. Compare against design system tokens:
+       - Color values match --md-* CSS variables for active theme
+       - Font size/weight/family match type scale tokens
+       - Padding/margin/gap match spacing tokens
+       - Border radius matches shape tokens
+       - Box shadow matches elevation tokens
+    3. Report drift:
+       - PASS: all values match within tolerance (1px for spacing, exact for colors)
+       - FAIL: list each mismatch with expected vs actual
+```
+
+**Layer C — Visual Regression (AI-assisted):**
+```
+VISUAL_CHECK regression:
+  FOR EACH scene IN spec.scenes:
+    FOR EACH breakpoint IN scene.responsive:
+      1. Render scene at breakpoint in headless browser
+      2. Take screenshot (PNG, full page)
+      3. Send to AI vision with SCENE spec as context
+      4. AI checks:
+         - Component spatial arrangement matches LAYOUT declaration
+         - Visual hierarchy (prominent elements, whitespace balance)
+         - Overlay rendering (backdrop opacity, content centering)
+         - Responsive adaptation (columns collapse correctly, hidden elements gone)
+      5. AI returns:
+         - PASS/FAIL per check
+         - Annotated screenshot with flagged areas
+         - Confidence score per check
+      6. FAIL threshold: any check below 0.9 confidence
+```
+
+### UXSpec.6 UX Test Scenarios
+
+UX scenarios validate scene rendering and transition flows. They use the same
+SCENARIO format as functional tests but add VISUAL and NAVIGATE assertions.
+
+**Scene test** (validates a single scene renders correctly):
+```
+SCENARIO UX-{N}: {scene renders correctly} [SEC:UXSpec.2]
+  GIVEN:
+  - {backend state — mock data}
+  - {user role/permissions}
+  WHEN:
+  - {scene} is rendered at {viewport_width}px
+  THEN:
+  - {component assertions — what's visible, what's not}
+  - {data assertions — correct values displayed}
+  VISUAL:
+  - structural: {specific DOM checks}
+  - tokens: {specific token compliance checks}
+  - regression: {viewport}px screenshot passes AI check
+```
+
+**Flow test** (validates transitions between scenes):
+```
+SCENARIO UX-{N}: {user journey name} [SEC:UXSpec.3]
+  GIVEN:
+  - {starting scene and state}
+  WHEN:
+  - User {interaction — clicks, types, submits}
+  THEN:
+  - NAVIGATE: {transition_name} fires
+  - ANIMATION: {animation_type} plays for {duration}ms
+  - SCENE: {target_scene} is now active
+  - {assertions about target scene state}
+  WHEN:
+  - User {next interaction}
+  THEN:
+  - ...
+```
+
+**Interaction test** (validates component behavior within a scene):
+```
+SCENARIO UX-{N}: {interaction name} [SEC:UXSpec.2]
+  GIVEN:
+  - {scene} is rendered
+  WHEN:
+  - User hovers {component}
+  THEN:
+  - {component} shows hover state (8% opacity overlay)
+  WHEN:
+  - User clicks {component}
+  THEN:
+  - {component} shows pressed state
+  - {side effect — API call, state change, overlay appears}
+```
+
+**Overlay test** (validates overlay lifecycle):
+```
+SCENARIO UX-{N}: {overlay name} lifecycle [SEC:UXSpec.4]
+  GIVEN:
+  - {scene} is rendered
+  WHEN:
+  - {trigger event}
+  THEN:
+  - Overlay {name} appears at z-index {z}
+  - Backdrop is visible (if declared)
+  - Focus is trapped within overlay
+  WHEN:
+  - {dismiss event}
+  THEN:
+  - Overlay dismissed
+  - Focus returns to trigger element
+  - Base scene is interactive again
+```
+
+UX scenarios execute in a headless browser connected to a mock backend (l2mify's
+own mock mode). The test runner:
+1. Renders the scene using the built frontend artifacts
+2. Connects to l2mify mock backend (REPLAY tier for fast, deterministic responses)
+3. Drives interactions via Playwright/Puppeteer (click, type, wait)
+4. Asserts DOM state after each action
+5. Takes screenshots at assertion points for visual verification
+6. Reports pass/fail per scenario with annotated screenshots on failure
+
+---
+
 ## Dependencies
 
 **External systems, libraries, and asset packs this project requires.** Every dependency
