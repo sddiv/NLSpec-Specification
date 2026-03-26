@@ -137,6 +137,11 @@ SECTIONS:
   AssetCatalog    — file paths, formats, dimensions, variants (workspace + installed external)
   LocaleCatalog   — locale files, fallback chains, string classifications
   StyleGuide      — RULEs and TOKENs (design constraints, typography, spacing)
+                    Use component RULEs (with classes/example/constraints) for verifiable components.
+                    Use simple RULEs (with applies_to/constraint) for global design constraints.
+  BuildUnits      — (optional) UNIT blocks and SEQUENCE for artifact generation pipeline.
+                    Include when this asset spec is used to generate artifacts via LLM pipeline.
+                    Can also be a separate build-units.md file alongside the spec.
   Boundaries      — what this asset does not cover
   Contracts       — design constraints exported to consumers
   LayerContext    — (optional) layer composition: which layers these assets serve
@@ -418,7 +423,14 @@ inputs, outputs, preconditions, postconditions, error conditions, and behavioral
 
 **For ASSET specs:** Functions section becomes the **style guide** — the design rules and
 tokens the agent must follow when writing code that references these assets. Use
-RULE blocks instead of FUNCTION blocks:
+RULE blocks instead of FUNCTION blocks.
+
+**RULEs come in two forms.** Use the **simple form** for global design constraints
+(accessibility, contrast, spacing rules). Use the **component form** for individual
+UI components that a generator agent must produce — it supports verification-friendly
+fields that enable mechanical checking by a Verifier Harness.
+
+### Simple RULE (global constraints)
 
 ```
 RULE {rule_name}:
@@ -426,7 +438,75 @@ RULE {rule_name}:
   constraint  : {the rule itself — e.g., "minimum touch target is 44x44px"}
   rationale   : {why this rule exists}
   exceptions  : {when it's OK to deviate, or "none"}
+```
 
+### Component RULE (verification-friendly)
+
+For components where a generator agent must produce implementation artifacts (CSS,
+React components, HTML), use the component form. This form enables a **deterministic
+Verifier Harness** to mechanically check generator output without interpretation.
+
+```
+RULE {component_name}:
+  purpose     : {what this component does — for humans and generator agents}
+  classes     : {verification checklist — ALL required selectors, class names, or elements}
+  example     : |
+    {2-4 representative implementations showing the pattern}
+    {uses token variables, naming conventions, structural patterns}
+    {the generator follows this pattern for ALL items in classes}
+  constraints :
+    - {machine-checkable rule — specific enough for a Verifier Harness}
+    - {machine-checkable rule}
+```
+
+**Field semantics:**
+
+- `purpose:` — Human-readable description. Generator agents read this to understand
+  what they're building. Orchestrator agents read it to plan decomposition.
+- `classes:` — **The verification checklist.** Lists every selector, class name, or
+  element the generator must produce. The Verifier checks that every item in this
+  list appears in the output. Nothing more, nothing less.
+- `example:` — **The pattern to follow.** Shows 2-4 representative implementations
+  that demonstrate token usage, naming conventions, structural patterns, and state
+  handling. The generator extrapolates from examples to produce ALL items in `classes:`.
+  The Verifier checks that example selectors match exactly in the output.
+- `constraints:` — **Machine-checkable rules.** Each constraint must be specific
+  enough for a deterministic script to verify. Bad: "buttons should look good."
+  Good: "hover adds ::after overlay at 8% opacity." The Verifier converts these
+  into mechanical checks.
+
+**Why examples over exhaustive literals:** Exhaustive implementation in the spec
+defeats its purpose — the spec becomes a dump of the artifact rather than a
+specification of it. Examples show the *pattern*; the generator fills in the rest.
+The verification checklist (`classes:`) ensures completeness. This keeps specs compact
+while making them mechanically verifiable.
+
+Example component RULE:
+```
+RULE button:
+  purpose: Primary interactive control for initiating actions or navigation.
+  classes: .lf-btn, .lf-btn--lg, .lf-btn--md, .lf-btn--sm,
+           .lf-btn--filled-primary, .lf-btn--filled-secondary, .lf-btn--filled-tertiary,
+           .lf-btn--tonal-primary, .lf-btn--tonal-secondary, .lf-btn--tonal-tertiary,
+           .lf-btn--outlined-primary, .lf-btn--text-primary
+  example: |
+    .lf-btn { display: inline-flex; align-items: center; gap: 8px;
+              font-family: var(--md-font-plain); position: relative; cursor: pointer; }
+    .lf-btn::after { content: ''; position: absolute; inset: 0;
+                     background: currentColor; opacity: 0; transition: opacity 0.2s; }
+    .lf-btn:hover::after { opacity: 0.08; }
+    .lf-btn--md { height: 40px; padding: 0 24px; font-size: 14px;
+                  border-radius: var(--md-shape-full); }
+  constraints:
+    - hover overlay uses ::after with 8% opacity, active uses 12%
+    - all size variants use border-radius: var(--md-shape-full)
+    - filled variants apply elevation-1, tonal variants have no shadow
+    - disabled state: opacity 0.38, pointer-events: none, no shadow
+```
+
+### TOKEN blocks
+
+```
 TOKEN {token_name}:
   category    : {color | spacing | typography | breakpoint | shadow | border}
   value       : {the value — e.g., "#1a73e8", "16px", "Inter 400"}
@@ -434,7 +514,204 @@ TOKEN {token_name}:
   css_var     : {CSS custom property name, if applicable — e.g., "--color-primary"}
 ```
 
-Example style guide:
+### UNIT blocks (Build Decomposition)
+
+UNITs solve a specific problem: when an LLM Orchestrator reads a large spec and summarizes
+it into a Generator prompt, it loses the details that matter. A "section title uses the
+secondary color at 28px" becomes "style section titles appropriately" — and the Generator
+produces plausible but incorrect output.
+
+A UNIT is the spec author's declaration of how the spec should be sliced for generation.
+The author knows which details matter, which RULE blocks are coupled, and what specific
+mistakes a Generator is likely to make. This knowledge belongs in the spec, not in
+generic pipeline instructions.
+
+**UNITs separate routing from interpretation.** The Orchestrator becomes a build runner
+that reads the UNIT manifest and calls a deterministic Extractor for each step. The
+Extractor resolves dependencies into verbatim spec content. The Generator receives
+focused, complete context with an embedded prompt written by the spec author. No
+summarization occurs at any point.
+
+```
+UNIT {unit_name}:
+  output      : {filename or append target — e.g., "gen-step2-components.css (append)"}
+  depends:
+    - SECTION {section_name}     -- include entire section verbatim
+    - RULE {rule_name}           -- include specific RULE block verbatim
+    - TOKEN {token_name}         -- include specific TOKEN block verbatim
+    - TOKEN {prefix}*            -- wildcard: all TOKENs matching prefix
+    - ALGORITHM {algo_name}      -- include specific ALGORITHM block verbatim
+  prompt: |
+    {Generator instructions written by the spec author.
+     This is NOT a summary of the depends — it's the author's guidance
+     on what matters for this specific build unit.
+
+     CRITICAL RULES call out known gotchas: values the Generator is likely
+     to get wrong, properties it tends to omit, patterns it tends to split
+     or merge incorrectly. The author knows these from experience with
+     the specific design system.}
+  verify: |
+    {Verification criteria for this unit's output.
+     Each criterion must be mechanically checkable.
+     The Verifier converts these into pass/fail checks.}
+```
+
+**Field semantics:**
+
+- `output:` — Where this unit's output goes. Can be a new file or an append to a shared
+  file. The Assembler uses this to combine outputs.
+- `depends:` — References to spec elements. The deterministic Extractor resolves each
+  reference to verbatim spec content and concatenates them. No interpretation. The
+  Generator sees the full RULE/TOKEN/SECTION blocks exactly as the spec author wrote them.
+- `prompt:` — **The spec author's generator instructions.** Written by the person who
+  designed the system, not by a generic pipeline. Contains domain-specific knowledge:
+  which values differ from what the Generator's training data would suggest, which
+  properties are easy to confuse, which selectors must use grouped syntax. This is the
+  author's expertise encoded as generation guidance.
+- `verify:` — Per-unit acceptance criteria. More focused than the full-artifact Verifier.
+  Each UNIT's output is verified independently before the pipeline proceeds.
+
+**Why the spec author writes the prompt:** A generic CodingInstructions file can say
+"follow the spec." But only the spec author knows that `.spacer` should use `height: 24px`
+(not `flex: 1`), that `.lf-chip` border-radius is `var(--md-shape-sm)` (not
+`var(--md-shape-full)` like other pill shapes), or that topbar gradients use 90deg (not
+135deg like header gradients). These are the details that make the difference between
+plausible output and correct output. The author captures them at spec-writing time, in
+context, rather than hoping a generic Orchestrator discovers them at build time.
+
+**Build sequence:** UNITs are collected into a SEQUENCE block that defines the build order:
+
+```
+SEQUENCE {artifact_name}:
+  steps:
+    1. {unit_name_a}
+    2. {unit_name_b}
+    3. {unit_name_c}
+  assembly: {assembler script or instructions}
+```
+
+The Orchestrator reads the SEQUENCE to determine build order, executes each UNIT through
+the Extractor → Generator → Verifier cycle, and runs the assembly step at the end.
+
+**Example UNIT:**
+
+```
+UNIT button-css:
+  output: gen-step2-components.css (append)
+  depends:
+    - RULE button
+    - RULE interactive-transitions
+    - TOKEN elevation-1
+    - TOKEN elevation-2
+    - TOKEN shape-full
+    - TOKEN motion-ease-standard
+    - TOKEN motion-duration-short
+  prompt: |
+    Generate CSS for the button component.
+    Output ONLY the selectors listed in RULE button classes: and compound:.
+    Copy property values from example: exactly.
+
+    CRITICAL RULES:
+    - .lf-btn MUST include font-family, font-weight, text-decoration, white-space
+    - .lf-btn--md MUST include letter-spacing: 0.1px
+    - Every size variant needs explicit height, padding, font-size, border-radius
+    - Tonal variants have NO box-shadow (tonal:hover adds elevation-1)
+    - Copy properties exactly — do not add, remove, or change values
+  verify: |
+    - .lf-btn has font-family and font-weight properties
+    - .lf-btn--md has letter-spacing property
+    - .lf-btn::after exists with opacity: 0
+    - All 3 tonal variants exist WITHOUT box-shadow
+```
+
+**Example UNIT (backend API — Python):**
+
+```
+UNIT user-service:
+  output: src/services/user_service.py
+  depends:
+    - RECORD User
+    - RECORD UserCreateRequest
+    - FUNCTION create_user
+    - FUNCTION get_user_by_id
+    - SECTION Authentication
+  prompt: |
+    Generate a Python service module implementing user management.
+    Output a single Python file with all functions specified.
+
+    CRITICAL RULES:
+    - create_user MUST hash password with bcrypt before storing
+    - get_user_by_id MUST return None (not raise) for missing users
+    - All database calls go through the repository pattern — no direct SQL
+    - email validation uses the regex from SECTION Authentication
+    - created_at timestamps are UTC, stored as ISO 8601
+  verify: |
+    - Function create_user exists with parameters matching FUNCTION spec
+    - Function get_user_by_id exists and returns Optional[User]
+    - bcrypt or argon2 import present (password hashing)
+    - No raw SQL strings (uses repository abstraction)
+    - created_at uses datetime.utcnow() or equivalent
+```
+
+**Example UNIT (infrastructure — Terraform):**
+
+```
+UNIT vpc-module:
+  output: modules/vpc/main.tf
+  depends:
+    - RECORD NetworkConfig
+    - SECTION Networking
+    - ALGORITHM subnet-allocation
+  prompt: |
+    Generate a Terraform module for VPC provisioning.
+
+    CRITICAL RULES:
+    - CIDR block comes from NetworkConfig.vpc_cidr variable, not hardcoded
+    - Subnet allocation follows ALGORITHM subnet-allocation: /24 for public, /22 for private
+    - NAT gateway is conditional on var.enable_nat (cost optimization)
+    - All resources tagged with var.project and var.environment
+    - Flow logs enabled by default (var.enable_flow_logs = true)
+  verify: |
+    - aws_vpc resource exists with cidr_block from variable
+    - Public subnets use /24 mask, private use /22
+    - NAT gateway has count or for_each conditional on var.enable_nat
+    - All resources have tags block with project and environment
+```
+
+**Example UNIT (database migration — SQL):**
+
+```
+UNIT migration-003:
+  output: migrations/003_add_audit_trail.sql
+  depends:
+    - RECORD AuditEvent
+    - RECORD AuditPolicy
+    - FUNCTION log_audit_event
+    - SECTION Data Retention
+  prompt: |
+    Generate a PostgreSQL migration that creates the audit trail tables.
+
+    CRITICAL RULES:
+    - audit_events table partitioned by created_at (monthly range)
+    - Partition creation uses pg_partman extension
+    - Indexes: (entity_type, entity_id), (actor_id, created_at), (event_type)
+    - Retention policy: 90 days for DEBUG, 1 year for INFO, forever for SECURITY
+    - All columns NOT NULL unless RECORD field says "| None"
+    - Use TIMESTAMPTZ not TIMESTAMP for all time columns
+  verify: |
+    - CREATE TABLE audit_events exists with PARTITION BY RANGE
+    - Three indexes exist matching the spec
+    - created_at column is TIMESTAMPTZ
+    - retention_days column matches SECTION Data Retention values
+```
+
+**UNITs can live in the spec or in a separate build-units file.** For small specs (under
+30 RULEs), inline UNITs in the spec keep everything together. For larger specs, a dedicated
+`build-units.md` alongside the spec keeps design content separate from build decomposition.
+Either way, the Extractor reads both files.
+
+### Example style guide
+
 ```
 RULE minimum-touch-target:
   applies_to  : all interactive elements (buttons, links, form controls)
@@ -962,8 +1239,7 @@ navigate between views (transitions), and how visual correctness is verified.
 UXSpec is design-system-agnostic. It references components from a registered design system
 (declared via `USES ASSET: {DesignSystem} FROM {spec.md}`). The design system provides
 the component catalog — UXSpec composes those components into scenes. Any design system
-that exports a COMPONENT_CATALOG can be used: l2mflare, Material 3 generators, Shadcn,
-custom systems.
+that exports a COMPONENT_CATALOG can be used: Material 3, Shadcn, custom design systems.
 
 **When to use UXSpec:** Any spec that declares screens, views, or user-facing workflows.
 If the spec has a frontend, it should have a UXSpec section.
@@ -1089,7 +1365,7 @@ SCENE Dashboard:
 
   COMPONENTS:
     sidebar: Sidebar(width="default")
-      SidebarHeader(title="L2Mify")
+      SidebarHeader(title="My App")
       SidebarSection(title="NAVIGATION")
         SidebarItem(icon="dashboard", label="Dashboard", active=true)
         SidebarItem(icon="science", label="Mock", badge={active_mock_count})
@@ -1356,10 +1632,9 @@ SCENARIO UX-{N}: {overlay name} lifecycle [SEC:UXSpec.4]
   - Base scene is interactive again
 ```
 
-UX scenarios execute in a headless browser connected to a mock backend (l2mify's
-own mock mode). The test runner:
+UX scenarios execute in a headless browser connected to a mock backend. The test runner:
 1. Renders the scene using the built frontend artifacts
-2. Connects to l2mify mock backend (REPLAY tier for fast, deterministic responses)
+2. Connects to a mock backend (replay mode for fast, deterministic responses)
 3. Drives interactions via Playwright/Puppeteer (click, type, wait)
 4. Asserts DOM state after each action
 5. Takes screenshots at assertion points for visual verification
@@ -2254,6 +2529,108 @@ can be a brief reference:
   (e.g., don't build if infrastructure is missing).
 - The pipeline must be idempotent: running it twice should produce the same result
   (or detect that it's already complete and skip).
+
+### Generation Pipelines — The 2-LLM + Verifier Harness Pattern
+
+**When a spec defines artifacts that must be generated by LLMs** (CSS from a design
+system, HTML from a showcase catalog, code from functional specifications), the
+AgentPipeline should use the **2-LLM + Verifier Harness** pattern. This pattern
+separates concerns into three roles that are never combined:
+
+```
+GENERATION PIPELINE:
+
+  ORCHESTRATOR (LLM):
+    Reads   : L3 spec, L4 spec, CodingInstructions, Verifier output
+    Does    : Decomposes the artifact into generation steps.
+              Feeds each step to a Generator with a focused prompt.
+              Reads Verifier output after each step.
+              On FAIL: crafts negative feedback with specific errors, retries Generator.
+              On PASS: proceeds to next step.
+              Assembles final artifact from verified parts.
+    Does NOT: Generate artifact content itself (CSS, HTML, JS, code).
+
+  GENERATOR (LLM — fresh agent per step):
+    Reads   : Step-specific prompt from Orchestrator, spec excerpts
+    Does    : Generates one part of the artifact.
+              Follows examples and constraints from RULE blocks.
+    Does NOT: Self-verify. Has no access to the oracle or Verifier.
+
+  VERIFIER HARNESS (deterministic script — NOT an LLM):
+    Reads   : Generator output, oracle (extracted from reference or spec)
+    Does    : Parses output mechanically (e.g., CSS → selector → {property: value} dicts).
+              Compares against oracle or checklist.
+              Reports: missing elements, extra elements, value mismatches.
+              Returns PASS or FAIL with specific error list.
+    Does NOT: Interpret, judge, or approximate. Binary pass/fail only.
+```
+
+**The generate → verify → retry loop:**
+
+```
+FOR EACH generation_step:
+  attempt = 0
+  LOOP:
+    attempt += 1
+    output = Generator(step_prompt + negative_feedback_if_retry)
+    result = Verifier(output, oracle_or_checklist)
+    IF result == PASS: break
+    IF attempt >= max_attempts: ESCALATE to Orchestrator for manual review
+    negative_feedback = result.errors  # specific: "selector X missing prop Y"
+```
+
+**Negative feedback must be specific and actionable.** Not "try again" or "there were
+errors." Each error includes: what was expected, what was found (or not found), and
+where. The Orchestrator formats Verifier errors into a structured prompt for the
+Generator's next attempt.
+
+```
+RECORD NegativeFeedback:
+  attempt           : Integer
+  validation_errors : List<ValidationError>
+  previous_output   : String | None
+  summary           : String  -- Orchestrator-crafted, specific and actionable
+
+RECORD ValidationError:
+  category          : MISSING_ELEMENT | EXTRA_ELEMENT | VALUE_MISMATCH |
+                      STRUCTURAL_MISMATCH | SCENARIO_FAILURE
+  location          : String  -- where in the output
+  expected          : String  -- what the oracle/spec says
+  actual            : String  -- what was generated (or "absent")
+  severity          : BLOCKER | WARNING
+```
+
+**When to use this pattern:**
+
+- The artifact is verifiable against a spec or oracle (CSS, HTML, structured code)
+- The spec uses component RULEs with `classes:` checklists and `example:` patterns
+- Accuracy matters more than speed — you'd rather retry 3 times than ship wrong output
+- The artifact is large enough to decompose into independently verifiable parts
+
+**When NOT to use this pattern:**
+
+- The artifact is purely creative (prose, marketing copy) with no mechanical checks
+- The task is simple enough for a single agent to handle in one pass
+- There is no oracle or spec-derived checklist to verify against
+
+**CodingInstructions document:** When a spec uses this pattern, it should include a
+companion `CodingInstructions.md` document (referenced from the L4 user profile) that
+describes: (1) the pipeline architecture, (2) each generation step with its prompt
+template and retry budget, (3) the Verifier's oracle format and comparison rules,
+and (4) the assembly process for combining verified parts.
+
+Example generation step definition:
+```
+GENERATION STEP 2: Component CSS
+  generator_prompt: "For each RULE in L3, generate full CSS for ALL classes
+    listed in the `classes:` field. Follow the pattern shown in `example:`
+    and obey all `constraints:`. Use token variables for all design values."
+  verifier_check : Every class in `classes:` has a selector in the output.
+                   Property values for example selectors match exactly.
+                   No invented selectors beyond what's in `classes:`.
+  retry_budget   : 3 attempts
+  oracle_source  : Extracted from reference artifact or spec `classes:` fields
+```
 
 ---
 
