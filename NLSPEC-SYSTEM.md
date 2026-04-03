@@ -1,9 +1,9 @@
 # nlspec — How Specs Compose
 
 > This document describes how nlspec specs relate to each other: imports,
-> graphs, layers, substrates. The format (RECORD, FUNCTION, SCENARIO,
-> UNIT) is defined in NLSPEC-TEMPLATE.md. This document defines how
-> specs compose at scale.
+> graphs, layers, substrates. The format (RECORD, FUNCTION, SCENARIO)
+> is defined in NLSPEC-TEMPLATE.md. This document defines how specs
+> compose at scale.
 
 ---
 
@@ -108,7 +108,7 @@ and verification. Other specs reference it via `USES ASSET:` in Architecture.3.
 ## Additional Element Types
 
 Beyond the core element types defined in NLSPEC-TEMPLATE.md (RECORD, FUNCTION,
-SCENARIO, RULE, TOKEN, ALGORITHM, UNIT), specs can include domain-specific
+SCENARIO, RULE, TOKEN, ALGORITHM), specs can include domain-specific
 element types. The standard is extensible — any named, typed block with
 consistent structure is valid.
 
@@ -164,16 +164,6 @@ The Contracts section declares what a spec EXPORTS (constraints, invariants,
 seed data, policies) and what it EXPECTS from dependencies. A resolver can
 walk the graph and produce a deterministic seed manifest — the complete
 initial state of the system. No manual configuration, no hidden defaults.
-
----
-
-## Artifact Generation via UNITs
-
-Specs can include UNIT blocks that decompose artifact generation into
-self-contained tasks with explicit dependency boundaries. Each UNIT declares
-what it produces, what spec content it needs, and how its output is verified.
-The UNIT grammar and examples are defined in the BuildUnits section of
-NLSPEC-TEMPLATE.md.
 
 ---
 

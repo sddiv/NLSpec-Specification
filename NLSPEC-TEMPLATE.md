@@ -139,9 +139,6 @@ SECTIONS:
   StyleGuide      — RULEs and TOKENs (design constraints, typography, spacing)
                     Use component RULEs (with classes/example/constraints) for verifiable components.
                     Use simple RULEs (with applies_to/constraint) for global design constraints.
-  BuildUnits      — (optional) UNIT blocks and SEQUENCE for artifact generation pipeline.
-                    Include when this asset spec is used to generate artifacts via LLM pipeline.
-                    Can also be a separate build-units.md file alongside the spec.
   Boundaries      — what this asset does not cover
   Contracts       — design constraints exported to consumers
   LayerContext    — (optional) layer composition: which layers these assets serve
@@ -462,7 +459,7 @@ RULE {component_name}:
 **Field semantics:**
 
 - `purpose:` — Human-readable description. Generator agents read this to understand
-  what they're building. Orchestrator agents read it to plan decomposition.
+  what they're building. Build tools read it to plan decomposition.
 - `classes:` — **The verification checklist.** Lists every selector, class name, or
   element the generator must produce. The Verifier checks that every item in this
   list appears in the output. Nothing more, nothing less.
@@ -514,201 +511,6 @@ TOKEN {token_name}:
   css_var     : {CSS custom property name, if applicable — e.g., "--color-primary"}
 ```
 
-### UNIT blocks (Build Decomposition)
-
-UNITs solve a specific problem: when an LLM Orchestrator reads a large spec and summarizes
-it into a Generator prompt, it loses the details that matter. A "section title uses the
-secondary color at 28px" becomes "style section titles appropriately" — and the Generator
-produces plausible but incorrect output.
-
-A UNIT is the spec author's declaration of how the spec should be sliced for generation.
-The author knows which details matter, which RULE blocks are coupled, and what specific
-mistakes a Generator is likely to make. This knowledge belongs in the spec, not in
-generic pipeline instructions.
-
-**UNITs separate routing from interpretation.** The Orchestrator becomes a build runner
-that reads the UNIT manifest and calls a deterministic Extractor for each step. The
-Extractor resolves dependencies into verbatim spec content. The Generator receives
-focused, complete context with an embedded prompt written by the spec author. No
-summarization occurs at any point.
-
-```
-UNIT {unit_name}:
-  output      : {filename or append target — e.g., "gen-step2-components.css (append)"}
-  depends:
-    - SECTION {section_name}     -- include entire section verbatim
-    - RULE {rule_name}           -- include specific RULE block verbatim
-    - TOKEN {token_name}         -- include specific TOKEN block verbatim
-    - TOKEN {prefix}*            -- wildcard: all TOKENs matching prefix
-    - ALGORITHM {algo_name}      -- include specific ALGORITHM block verbatim
-  prompt: |
-    {Generator instructions written by the spec author.
-     This is NOT a summary of the depends — it's the author's guidance
-     on what matters for this specific build unit.
-
-     CRITICAL RULES call out known gotchas: values the Generator is likely
-     to get wrong, properties it tends to omit, patterns it tends to split
-     or merge incorrectly. The author knows these from experience with
-     the specific design system.}
-  verify: |
-    {Verification criteria for this unit's output.
-     Each criterion must be mechanically checkable.
-     The Verifier converts these into pass/fail checks.}
-```
-
-**Field semantics:**
-
-- `output:` — Where this unit's output goes. Can be a new file or an append to a shared
-  file. The Assembler uses this to combine outputs.
-- `depends:` — References to spec elements. The deterministic Extractor resolves each
-  reference to verbatim spec content and concatenates them. No interpretation. The
-  Generator sees the full RULE/TOKEN/SECTION blocks exactly as the spec author wrote them.
-- `prompt:` — **The spec author's generator instructions.** Written by the person who
-  designed the system, not by a generic pipeline. Contains domain-specific knowledge:
-  which values differ from what the Generator's training data would suggest, which
-  properties are easy to confuse, which selectors must use grouped syntax. This is the
-  author's expertise encoded as generation guidance.
-- `verify:` — Per-unit acceptance criteria. More focused than the full-artifact Verifier.
-  Each UNIT's output is verified independently before the pipeline proceeds.
-
-**Why the spec author writes the prompt:** A generic CodingInstructions file can say
-"follow the spec." But only the spec author knows that `.spacer` should use `height: 24px`
-(not `flex: 1`), that `.lf-chip` border-radius is `var(--md-shape-sm)` (not
-`var(--md-shape-full)` like other pill shapes), or that topbar gradients use 90deg (not
-135deg like header gradients). These are the details that make the difference between
-plausible output and correct output. The author captures them at spec-writing time, in
-context, rather than hoping a generic Orchestrator discovers them at build time.
-
-**Build sequence:** UNITs are collected into a SEQUENCE block that defines the build order:
-
-```
-SEQUENCE {artifact_name}:
-  steps:
-    1. {unit_name_a}
-    2. {unit_name_b}
-    3. {unit_name_c}
-  assembly: {assembler script or instructions}
-```
-
-The Orchestrator reads the SEQUENCE to determine build order, executes each UNIT through
-the Extractor → Generator → Verifier cycle, and runs the assembly step at the end.
-
-**Example UNIT:**
-
-```
-UNIT button-css:
-  output: gen-step2-components.css (append)
-  depends:
-    - RULE button
-    - RULE interactive-transitions
-    - TOKEN elevation-1
-    - TOKEN elevation-2
-    - TOKEN shape-full
-    - TOKEN motion-ease-standard
-    - TOKEN motion-duration-short
-  prompt: |
-    Generate CSS for the button component.
-    Output ONLY the selectors listed in RULE button classes: and compound:.
-    Copy property values from example: exactly.
-
-    CRITICAL RULES:
-    - .lf-btn MUST include font-family, font-weight, text-decoration, white-space
-    - .lf-btn--md MUST include letter-spacing: 0.1px
-    - Every size variant needs explicit height, padding, font-size, border-radius
-    - Tonal variants have NO box-shadow (tonal:hover adds elevation-1)
-    - Copy properties exactly — do not add, remove, or change values
-  verify: |
-    - .lf-btn has font-family and font-weight properties
-    - .lf-btn--md has letter-spacing property
-    - .lf-btn::after exists with opacity: 0
-    - All 3 tonal variants exist WITHOUT box-shadow
-```
-
-**Example UNIT (backend API — Python):**
-
-```
-UNIT user-service:
-  output: src/services/user_service.py
-  depends:
-    - RECORD User
-    - RECORD UserCreateRequest
-    - FUNCTION create_user
-    - FUNCTION get_user_by_id
-    - SECTION Authentication
-  prompt: |
-    Generate a Python service module implementing user management.
-    Output a single Python file with all functions specified.
-
-    CRITICAL RULES:
-    - create_user MUST hash password with bcrypt before storing
-    - get_user_by_id MUST return None (not raise) for missing users
-    - All database calls go through the repository pattern — no direct SQL
-    - email validation uses the regex from SECTION Authentication
-    - created_at timestamps are UTC, stored as ISO 8601
-  verify: |
-    - Function create_user exists with parameters matching FUNCTION spec
-    - Function get_user_by_id exists and returns Optional[User]
-    - bcrypt or argon2 import present (password hashing)
-    - No raw SQL strings (uses repository abstraction)
-    - created_at uses datetime.utcnow() or equivalent
-```
-
-**Example UNIT (infrastructure — Terraform):**
-
-```
-UNIT vpc-module:
-  output: modules/vpc/main.tf
-  depends:
-    - RECORD NetworkConfig
-    - SECTION Networking
-    - ALGORITHM subnet-allocation
-  prompt: |
-    Generate a Terraform module for VPC provisioning.
-
-    CRITICAL RULES:
-    - CIDR block comes from NetworkConfig.vpc_cidr variable, not hardcoded
-    - Subnet allocation follows ALGORITHM subnet-allocation: /24 for public, /22 for private
-    - NAT gateway is conditional on var.enable_nat (cost optimization)
-    - All resources tagged with var.project and var.environment
-    - Flow logs enabled by default (var.enable_flow_logs = true)
-  verify: |
-    - aws_vpc resource exists with cidr_block from variable
-    - Public subnets use /24 mask, private use /22
-    - NAT gateway has count or for_each conditional on var.enable_nat
-    - All resources have tags block with project and environment
-```
-
-**Example UNIT (database migration — SQL):**
-
-```
-UNIT migration-003:
-  output: migrations/003_add_audit_trail.sql
-  depends:
-    - RECORD AuditEvent
-    - RECORD AuditPolicy
-    - FUNCTION log_audit_event
-    - SECTION Data Retention
-  prompt: |
-    Generate a PostgreSQL migration that creates the audit trail tables.
-
-    CRITICAL RULES:
-    - audit_events table partitioned by created_at (monthly range)
-    - Partition creation uses pg_partman extension
-    - Indexes: (entity_type, entity_id), (actor_id, created_at), (event_type)
-    - Retention policy: 90 days for DEBUG, 1 year for INFO, forever for SECURITY
-    - All columns NOT NULL unless RECORD field says "| None"
-    - Use TIMESTAMPTZ not TIMESTAMP for all time columns
-  verify: |
-    - CREATE TABLE audit_events exists with PARTITION BY RANGE
-    - Three indexes exist matching the spec
-    - created_at column is TIMESTAMPTZ
-    - retention_days column matches SECTION Data Retention values
-```
-
-**UNITs can live in the spec or in a separate build-units file.** For small specs (under
-30 RULEs), inline UNITs in the spec keep everything together. For larger specs, a dedicated
-`build-units.md` alongside the spec keeps design content separate from build decomposition.
-Either way, the Extractor reads both files.
 
 ### Example style guide
 
@@ -1497,7 +1299,7 @@ Rules:
 
 ### UXSpec.5 Visual Verification
 
-Visual verification runs after a frontend BuildUnit is built. It validates that the
+Visual verification runs after a frontend artifact is built. It validates that the
 rendered output matches the SCENE spec. Three verification layers, run in order:
 
 **Layer A — Structural Verification (deterministic, no AI):**
@@ -2540,7 +2342,7 @@ separates concerns into three roles that are never combined:
 ```
 GENERATION PIPELINE:
 
-  ORCHESTRATOR (LLM):
+  PLANNER (LLM):
     Reads   : L3 spec, L4 spec, CodingInstructions, Verifier output
     Does    : Decomposes the artifact into generation steps.
               Feeds each step to a Generator with a focused prompt.
@@ -2551,7 +2353,7 @@ GENERATION PIPELINE:
     Does NOT: Generate artifact content itself (CSS, HTML, JS, code).
 
   GENERATOR (LLM — fresh agent per step):
-    Reads   : Step-specific prompt from Orchestrator, spec excerpts
+    Reads   : Step-specific prompt from Planner, spec excerpts
     Does    : Generates one part of the artifact.
               Follows examples and constraints from RULE blocks.
     Does NOT: Self-verify. Has no access to the oracle or Verifier.
@@ -2575,13 +2377,13 @@ FOR EACH generation_step:
     output = Generator(step_prompt + negative_feedback_if_retry)
     result = Verifier(output, oracle_or_checklist)
     IF result == PASS: break
-    IF attempt >= max_attempts: ESCALATE to Orchestrator for manual review
+    IF attempt >= max_attempts: ESCALATE to Planner for manual review
     negative_feedback = result.errors  # specific: "selector X missing prop Y"
 ```
 
 **Negative feedback must be specific and actionable.** Not "try again" or "there were
 errors." Each error includes: what was expected, what was found (or not found), and
-where. The Orchestrator formats Verifier errors into a structured prompt for the
+where. The Planner formats Verifier errors into a structured prompt for the
 Generator's next attempt.
 
 ```
@@ -2589,7 +2391,7 @@ RECORD NegativeFeedback:
   attempt           : Integer
   validation_errors : List<ValidationError>
   previous_output   : String | None
-  summary           : String  -- Orchestrator-crafted, specific and actionable
+  summary           : String  -- Planner-crafted, specific and actionable
 
 RECORD ValidationError:
   category          : MISSING_ELEMENT | EXTRA_ELEMENT | VALUE_MISMATCH |

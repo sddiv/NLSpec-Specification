@@ -21,12 +21,12 @@ nlspec/
 ├── README.md                    # You're reading it
 ├── LICENSE                      # CC-BY-4.0
 ├── NLSPEC-SYSTEM.md             # How specs compose: layers, substrates, graph relationships
-└── NLSPEC-TEMPLATE.md           # The spec template (SYSTEM | PATTERN | ASSET, UNIT/SEQUENCE grammar)
+└── NLSPEC-TEMPLATE.md           # The spec template (SYSTEM | PATTERN | ASSET types)
 ```
 
 | File | Purpose |
 |------|---------|
-| `NLSPEC-TEMPLATE.md` | The blank spec format. Copy it, fill it in. Defines all element types, section structures, and the UNIT/SEQUENCE grammar for artifact generation. |
+| `NLSPEC-TEMPLATE.md` | The blank spec format. Copy it, fill it in. Defines all element types, section structures, and the generation pipeline pattern. |
 | `NLSPEC-SYSTEM.md` | How specs compose and scale. Layer model, substrates, graph relationships. |
 
 ## Quick Start
@@ -76,34 +76,17 @@ API spec uses RECORD and FUNCTION blocks. An infrastructure spec uses ALGORITHM 
 The structural contract is fixed: every block is addressable by name and extractable
 without surrounding context.
 
-### UNITs — Generation Contracts
+### Closed-Context Generation
 
-A UNIT is a self-contained generation task with four fields: `output` (what file gets
-produced), `depends` (which named blocks from the spec are needed), `prompt` (instructions
-to the generator), and `verify` (how to check the output). The `depends` field creates
-a closed context — everything the generator needs is explicitly listed. Nothing ambient,
-nothing implied.
+Named blocks enable precise context slicing for code generation. Instead of feeding
+an entire spec to a generator and hoping it extracts the right details, a build tool
+can resolve specific block references to get verbatim content. The `depends` on named
+blocks creates a closed context — everything the generator needs is explicitly listed.
+Nothing ambient, nothing implied.
 
-```
-UNIT button-css:
-  output: gen-step2-components.css (append)
-  depends:
-    - RULE button
-    - RULE interactive-transitions
-    - TOKEN elevation-1
-    - TOKEN shape-full
-  prompt: |
-    Generate CSS for the button component.
-    CRITICAL RULES:
-    - .lf-btn MUST include font-family, font-weight
-    - Copy properties exactly — do not add, remove, or change values
-  verify: |
-    - .lf-btn has font-family and font-weight properties
-    - All 3 tonal variants exist WITHOUT box-shadow
-```
-
-UNITs work for any artifact type: CSS, Python services, Terraform modules, SQL migrations,
-React components. See NLSPEC-TEMPLATE.md for the full grammar and multi-domain examples.
+This eliminates the summarization problem: a large spec summarized into a generation
+prompt loses the details that matter. Named block references ensure the generator sees
+exact RULE constraints, TOKEN values, and RECORD fields as the spec author wrote them.
 
 ## Recommended Sections
 
@@ -123,7 +106,6 @@ React components. See NLSPEC-TEMPLATE.md for the full grammar and multi-domain e
 | BuildAndRun | Exact commands to build, test, run, verify |
 | Boundaries | Explicit non-goals (prevents scope creep) |
 | Contracts | EXPORTS, EXPECTS, conflict resolution |
-| BuildUnits | (Optional) UNIT blocks and SEQUENCE for artifact generation |
 | LayerContext | (Optional) Layer composition: derivation, stack, constraint flow |
 
 Sections are declared per-spec. Not all sections apply to every spec. PATTERN and ASSET
@@ -141,8 +123,8 @@ If a scenario fails, the implementation is wrong.
 is a named, extractable block. Agents and tooling resolve blocks by name to get
 verbatim content.
 
-**UNITs create closed generation contexts.** The `depends` field on a UNIT explicitly
-lists every block the generator needs. This eliminates summarization and prevents
+**Named blocks enable closed generation contexts.** A build tool resolves block
+references to get verbatim spec content. This eliminates summarization and prevents
 hallucination from training data.
 
 **Spec types.** SYSTEM specs produce running code (the default). PATTERN specs
@@ -167,7 +149,7 @@ idea into a complete specification standard.
 | **What it is** | 3 markdown files for one product | CLI + workflow scaffold | Workflow tools for SDD | A specification standard |
 | **Spec format** | Implicit (RECORD, FUNCTION, etc.) | Freeform markdown | Freeform markdown | Formalized template with typed elements (SYSTEM, PATTERN, ASSET) |
 | **Element types** | Used but not defined | None | None | RECORD, FUNCTION, SCENARIO, RULE, TOKEN, ALGORITHM — first-class, named, extractable |
-| **Artifact generation** | None | None | None | UNIT/SEQUENCE grammar: closed-context generation contracts with verification |
+| **Artifact generation** | None | None | None | Closed-context generation: named block dependencies + verification contracts |
 | **Cross-references** | None | None | None | USES, USED BY, SEC tags — agents walk edges for context slicing |
 | **Composition** | None | None | None | 4-layer derivation + horizontal composition + substrate branching |
 | **Self-describing** | No | No | No | Yes — the spec for nlspec is itself an nlspec |
