@@ -104,6 +104,7 @@ SECTIONS:
   SystemManifest  — platform composition, hardware, kernels, environment configs
   Deployment      — containers, manifests, pipelines, CI/CD
   Scenarios       — behavioral validation (the holdout set)
+  TestGeneration  — how tests derive from spec contracts, naming rules, deterministic validation
   Dependencies    — external systems, libraries, and asset packs with pinned versions
   FileStructure   — expected directory layout
   Maintenance     — bug workflow, patches, scenario tiers, versioning
@@ -376,23 +377,144 @@ ENUM Name:
 ALIAS Name = UnderlyingType    -- type alias
 ```
 
+### Data Contracts (CONSTRAINT blocks)
+
+Fields on RECORDs and parameters on FUNCTIONs can declare **data contracts** —
+machine-checkable constraints that define the valid value space. Data contracts
+serve three purposes:
+
+1. **Spec-level validation** — a deterministic checker can verify that every constraint
+   has at least one test exercising it, before any code is generated.
+2. **Code generation guidance** — the coding agent implements validation logic from
+   the constraints, not from guesswork.
+3. **Test sufficiency** — tooling can compute whether the test suite covers the
+   constraint space for each RECORD, without executing anything.
+
+Data contracts are optional. Fields without constraints are unconstrained (any value
+of the declared type is valid). When present, constraints are part of the spec contract
+and carry the same authority as PRECONDITIONS and POSTCONDITIONS on FUNCTIONs.
+
+#### Syntax
+
+Constraints are declared inline on fields using `CONSTRAINT:` blocks, or as
+standalone `INVARIANT:` blocks for cross-field rules.
+
+```
+RECORD Name:
+  field_name : Type
+    CONSTRAINT: {constraint_type} {parameters}
+    CONSTRAINT: {constraint_type} {parameters}
+
+  field_name : Type
+    CONSTRAINT: {constraint_type} {parameters}
+
+  INVARIANT: {cross-field rule in natural language}
+  INVARIANT: {another cross-field rule}
+
+  USED BY: function_a, function_b
+```
+
+#### Constraint Types
+
+```
+CONSTRAINT: RANGE min..max           -- numeric bounds (inclusive)
+CONSTRAINT: RANGE min..              -- numeric lower bound only
+CONSTRAINT: RANGE ..max              -- numeric upper bound only
+CONSTRAINT: NOT_EMPTY                -- string/list must have length >= 1
+CONSTRAINT: MAX_LENGTH n             -- string/list max length
+CONSTRAINT: MIN_LENGTH n             -- string/list min length
+CONSTRAINT: PATTERN "regex"          -- string must match regex
+CONSTRAINT: UNIQUE                   -- value must be unique within collection scope
+CONSTRAINT: IMMUTABLE                -- value cannot change after creation
+CONSTRAINT: ONE_OF [a, b, c]         -- value must be one of the listed literals
+CONSTRAINT: REFERENCES RecordName    -- foreign key: value must exist as an id in another RECORD
+CONSTRAINT: NOT_NULL                 -- field typed as `Type | None` must not be None in this context
+CONSTRAINT: POSITIVE                 -- shorthand for RANGE 1..
+CONSTRAINT: NON_NEGATIVE             -- shorthand for RANGE 0..
+CONSTRAINT: ISO_8601                 -- string must be valid ISO 8601 datetime
+CONSTRAINT: URI                      -- string must be valid URI
+CONSTRAINT: SORTED_BY field [ASC|DESC]  -- list must be sorted by the given field
+CONSTRAINT: MAX_ITEMS n              -- list/map max cardinality
+CONSTRAINT: MIN_ITEMS n              -- list/map min cardinality
+```
+
+Custom constraints use natural language:
+```
+CONSTRAINT: "latitude in WGS84 decimal degrees"
+CONSTRAINT: "must be a valid cron expression"
+```
+
+Custom constraints are not machine-checkable by automated tooling but are still part of
+the spec contract. The coding agent must implement validation for them, and tests must
+exercise them.
+
+#### Cross-Field Invariants
+
+INVARIANT blocks declare relationships between fields that cannot be expressed as
+single-field constraints:
+
+```
+RECORD DateRange:
+  start : Timestamp
+    CONSTRAINT: ISO_8601
+  end   : Timestamp
+    CONSTRAINT: ISO_8601
+
+  INVARIANT: end must be strictly after start
+  INVARIANT: duration (end - start) must not exceed 365 days
+```
+
+Invariants are named in tests via the convention `test_{record}_invariant_{description}`.
+
+#### Example
+
+```
+RECORD BuildUnit:
+  id             : String
+    CONSTRAINT: NOT_EMPTY
+    CONSTRAINT: PATTERN "^[a-z][a-z0-9-]*$"
+    CONSTRAINT: MAX_LENGTH 64
+  status         : BuildUnitStatus
+  attempt        : Integer
+    CONSTRAINT: RANGE 0..10
+    CONSTRAINT: NON_NEGATIVE
+  output_paths   : List<String>
+    CONSTRAINT: NOT_EMPTY
+  dependency_ids : List<String>
+  created_at     : Timestamp
+    CONSTRAINT: IMMUTABLE
+
+  INVARIANT: every entry in dependency_ids must reference an existing BuildUnit.id
+  INVARIANT: if status is COMMITTED, output_paths must have at least one entry
+
+  USED BY: run_build_loop, commit_unit, evaluate_unit
+```
+
+A deterministic checker can validate:
+- Each CONSTRAINT has at least one test asserting it (e.g., a test that verifies
+  `id` rejects empty strings, a test that verifies `attempt` rejects values > 10)
+- Each INVARIANT has at least one test asserting the cross-field rule (e.g., a test
+  that verifies committed units must have output_paths)
+
 ### DataModel.1 Core Records
 
 ```
 RECORD {EntityName}:
   id          : String              -- unique identifier, UUID v4
+    CONSTRAINT: NOT_EMPTY
+    CONSTRAINT: PATTERN "^[0-9a-f]{8}-..."
   created_at  : Timestamp           -- creation time, UTC
+    CONSTRAINT: IMMUTABLE
   {field}     : {Type}              -- {description}
+    CONSTRAINT: {constraint_type} {parameters}
   {field}     : {Type} | None       -- {description}, optional
   {field}     : List<{Type}>        -- {description}
+    CONSTRAINT: NOT_EMPTY
+
+  INVARIANT: {cross-field relationship}
 
   USED BY: function_a, function_b   -- functions that read/write this record (for context slicing)
 ```
-
-**Invariants:**
-- {field} must always satisfy {condition}
-- {field} is immutable after creation
-- If {field_a} is set, {field_b} must also be set
 
 ### DataModel.2 Enumerations
 
@@ -587,6 +709,12 @@ FUNCTION function_name(param: Type, param: Type) -> ReturnType
   USES: RecordA, RecordB       -- RECORDs this function reads/writes (for context slicing)
   THROWS: ErrorA, ErrorB       -- errors this function can produce
 
+  PARAM CONSTRAINTS:            -- data contracts on parameters (same syntax as RECORD fields)
+  - param: CONSTRAINT_TYPE args -- e.g., NOT_EMPTY, RANGE 1..100, PATTERN "^[a-z]+"
+
+  RETURN CONSTRAINTS:           -- data contracts on return value
+  - CONSTRAINT_TYPE args
+
   PRECONDITIONS:
   - {condition that must be true before calling}
 
@@ -610,6 +738,10 @@ FUNCTION function_name(param: Type, param: Type) -> ReturnType
   - {Any additional behavioral notes}
   - {Thread safety guarantees}
   - {Idempotency guarantees}
+
+PARAM CONSTRAINTS and RETURN CONSTRAINTS use the same constraint type vocabulary as
+RECORD field constraints (RANGE, NOT_EMPTY, PATTERN, etc.). They enable deterministic
+verification that parameter validation tests exist for each function without executing code.
 ```
 
 ### Functions.1 {Function Group Name}
@@ -1029,6 +1161,177 @@ SCENARIO 30: {Boundary condition}
   THEN:
   - {system handles gracefully}
 ```
+
+---
+
+## TestGeneration
+
+**How tests derive from spec contracts.** Tests are not independent artifacts — they are
+spec-derived outputs, generated alongside source code and validated against the spec
+deterministically before execution.
+
+This section defines the rules for how spec contracts produce testable assertions, how
+tests are organized alongside source outputs, and how coverage and correctness can be
+validated without running any code.
+
+### TestGeneration.1 Tests as Spec Artifacts
+
+Tests MUST be generated from the spec, not written independently. They trace back to
+named spec elements (FUNCTION, RECORD, ENUM) and are managed as part of the same
+generation pipeline as source code. This ensures:
+
+- Incremental changes to specs produce incremental changes to tests
+- The spec is the single source of truth for what is tested and why
+- Tests can be regenerated from specs at any time without loss of intent
+- Test-to-spec traceability is deterministically verifiable
+
+Each source output SHOULD have a corresponding test output:
+
+```
+src/parser.py        ← generated from spec
+tests/test_parser.py ← generated from same spec, tests the parser's contracts
+```
+
+Infrastructure-only outputs (Dockerfile, docker-compose, config files) are exempt
+from test outputs.
+
+### TestGeneration.2 Test Derivation Rules
+
+Every FUNCTION in the spec produces tests according to these rules:
+
+```
+FUNCTION f(param: Type) -> ReturnType
+  THROWS: ErrorA, ErrorB
+
+Derived tests:
+  1. test_f_happy_path             — calls f with valid inputs, asserts return type
+  2. test_f_throws_error_a         — for each THROWS, triggers the error condition
+  3. test_f_throws_error_b
+  4. test_f_param_constraint_*     — for each PARAM CONSTRAINT, tests boundary values
+  5. test_f_return_constraint_*    — for each RETURN CONSTRAINT, asserts the contract
+  6. test_f_precondition_violated  — for each PRECONDITION, tests the failure case
+```
+
+Every RECORD with CONSTRAINTs produces tests:
+
+```
+RECORD R:
+  field : Type
+    CONSTRAINT: RANGE 0..100
+    CONSTRAINT: NOT_EMPTY
+
+Derived tests:
+  1. test_r_field_range_lower_bound    — asserts field accepts 0
+  2. test_r_field_range_upper_bound    — asserts field accepts 100
+  3. test_r_field_range_below          — asserts field rejects -1
+  4. test_r_field_range_above          — asserts field rejects 101
+  5. test_r_field_not_empty            — asserts field rejects empty value
+```
+
+Every RECORD with INVARIANTs produces tests:
+
+```
+RECORD R:
+  INVARIANT: end must be after start
+
+Derived tests:
+  1. test_r_invariant_end_after_start_valid    — valid case
+  2. test_r_invariant_end_after_start_invalid  — violation case
+```
+
+Every ENUM produces tests covering all variants:
+
+```
+ENUM Status:
+  ACTIVE, INACTIVE, SUSPENDED
+
+Derived tests:
+  1. test_status_all_variants_handled   — asserts every variant is reachable
+  2. test_status_invalid_value          — asserts rejection of non-variant values
+```
+
+### TestGeneration.3 Test Naming Conventions
+
+Tests follow strict naming so tooling can match them to spec elements:
+
+```
+test_{function_name}_*           — matches FUNCTION
+test_{function_name}_throws_{error}  — matches THROWS declaration
+test_{record_name}_*             — matches RECORD
+test_{record_name}_field_{name}_{constraint}  — matches CONSTRAINT
+test_{record_name}_invariant_*   — matches INVARIANT
+test_{enum_name}_*               — matches ENUM
+```
+
+Glob matching (`test_*{function_name}*`) is sufficient to associate a test with a
+function. Exact naming is preferred but not required.
+
+### TestGeneration.4 Mock Path Rules
+
+Tests that mock internal modules MUST use the actual module paths from the source tree.
+A deterministic validator can check this by:
+
+1. Building the set of valid module paths from the source directory
+2. Scanning all mock/patch targets in test functions
+3. Scanning string literal module paths in test files (e.g., `sys.modules` keys)
+4. Flagging any module path that does not exist in the source tree
+
+Common AI failure mode: generating mock paths that don't match the actual source
+structure (e.g., `myproject.core.store` when the real module is `myproject.store`).
+Deterministic path validation catches this before any test is executed.
+
+To prevent this failure mode during generation, the generation context for test
+outputs SHOULD include the actual source module tree:
+
+```
+Source module tree: myproject.store, myproject.parser, myproject.mcp.tools.crud_tools, ...
+```
+
+### TestGeneration.5 Deterministic Test Validation
+
+Test suites derived from specs can be validated deterministically — no LLM, no code
+execution. This validation sits between spec authoring and test execution: if tests
+are structurally defective, they should not be run.
+
+Two categories of validation:
+
+```
+Test Coverage (spec → tests):
+  - Every FUNCTION has at least one test function
+  - Every THROWS declaration has a test asserting the exception
+  - Every RECORD CONSTRAINT has a test asserting boundary values
+  - Every ENUM has tests covering all variants
+
+Test Correctness (tests → source):
+  - Test imports resolve to actual source modules
+  - Mock targets reference real module paths
+  - Async functions are mocked with async-compatible mocks
+  - Test naming follows conventions from TestGeneration.3
+```
+
+These checks are deterministic — they use AST analysis of the test files and the
+source tree, cross-referenced against the spec's named elements. No runtime, no
+network, no LLM. This is the same principle as spec well-formedness checking:
+deterministic validation gates before expensive runtime validation.
+
+### TestGeneration.6 Test Sufficiency Matrix
+
+A test sufficiency matrix is computable from spec contracts alone:
+
+```
+┌─────────────────────────┬──────────────────┬──────────┐
+│ Spec Element            │ Required Tests   │ Found    │
+├─────────────────────────┼──────────────────┼──────────┤
+│ FUNCTION parse_spec     │ 1 happy + 2 err  │ 3 ✓      │
+│ FUNCTION store_load     │ 1 happy + 1 err  │ 2 ✓      │
+│ RECORD BuildUnit.id     │ 3 (NOT_EMPTY,    │ 0 ✗      │
+│                         │  PATTERN, LENGTH)│          │
+│ ENUM BuildStatus        │ 1 (all variants) │ 1 ✓      │
+└─────────────────────────┴──────────────────┴──────────┘
+```
+
+This matrix is computable without generating code, without running tests, and without
+an LLM. It answers the question "do we have enough tests?" directly from the spec.
 
 ---
 

@@ -210,6 +210,33 @@ without changing it.
 
 ---
 
+## Test Composition Across Specs
+
+When a project has multiple specs, tests follow the same graph structure as the specs
+themselves. Each spec produces its own test suite. Cross-spec testing uses mocks at
+the IMPORT boundary.
+
+**Rule:** A spec's tests only test that spec's FUNCTIONs. IMPORTed functions from
+other specs are mocked. This preserves test isolation and prevents N² test explosion.
+
+**Mock boundary:** When Spec A imports `validate_token` from Spec B, Spec A's tests
+mock `validate_token` at the import boundary. Spec B's tests are responsible for
+testing `validate_token` directly. Deterministic validation (see TestGeneration.5 in
+the template) ensures that mock targets reference real modules — this prevents
+hallucinated module paths regardless of how many specs are composed.
+
+**Data contracts across specs:** When Spec A uses a RECORD defined in Spec B, the
+CONSTRAINT declarations on that RECORD travel with the import. Spec A's tests must
+respect those constraints when constructing test data — tooling can verify this by
+matching test fixture values against CONSTRAINT declarations from the source spec.
+
+**Substrate-scoped tests:** Each substrate (e.g., web, iOS, Android) gets its own
+test suite derived from its own L2 realization. Tests do not cross substrate boundaries.
+The L1 spec's tests validate contracts; each L2 test suite validates that the
+realization honors those contracts in its platform-specific way.
+
+---
+
 ## Substrate Dimensions — The 3D Model
 
 The 4-layer model is two-dimensional: vertical (DERIVES FROM) and horizontal

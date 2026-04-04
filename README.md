@@ -95,12 +95,13 @@ exact RULE constraints, TOKEN values, and RECORD fields as the spec author wrote
 | Abstract | One paragraph: what this spec defines |
 | Problem | Current state → deficiency → target → key insight |
 | Architecture | ASCII diagram, component inventory, data flows, patterns, assets |
-| DataModel | RECORD, ENUM, ALIAS definitions with invariants |
-| Functions | FUNCTION specs: inputs, outputs, behavior, errors |
+| DataModel | RECORD, ENUM, ALIAS definitions with invariants and data contracts |
+| Functions | FUNCTION specs: inputs, outputs, behavior, errors, param/return constraints |
 | API | HTTP endpoints, gRPC services, CLI commands, MCP tools |
 | Errors | Complete error hierarchy with handling rules |
 | Config | Every knob: type, default, env var, validation |
 | Scenarios | End-to-end behavioral tests (the holdout set) |
+| TestGeneration | How tests derive from spec contracts, naming rules, deterministic validation |
 | Dependencies | External systems, libraries, asset packs with pinned versions |
 | FileStructure | Expected directory layout |
 | BuildAndRun | Exact commands to build, test, run, verify |
@@ -127,6 +128,20 @@ verbatim content.
 references to get verbatim spec content. This eliminates summarization and prevents
 hallucination from training data.
 
+**Data contracts on fields.** RECORD fields and FUNCTION parameters can declare
+CONSTRAINT blocks (RANGE, NOT_EMPTY, UNIQUE, PATTERN, IMMUTABLE, etc.) — like Avro
+schemas but in natural language specs. Constraints define the valid value space for
+each field, enabling tooling to compute test sufficiency deterministically: does the
+test suite cover the constraint space? The answer is computable from the spec alone,
+without generating code or running tests.
+
+**Tests derive from spec contracts.** The TestGeneration section defines how every
+spec element produces testable assertions. Every FUNCTION gets a happy path test,
+every THROWS gets an error path test, every CONSTRAINT gets boundary tests. Tests
+are spec artifacts — they trace back to named blocks and are validated against the
+spec structure deterministically. This makes test coverage a property of the spec,
+not a property of the implementation.
+
 **Spec types.** SYSTEM specs produce running code (the default). PATTERN specs
 define reusable architectural blueprints. ASSET specs catalog static resources
 and define style guides (RULEs and TOKENs).
@@ -149,6 +164,8 @@ idea into a complete specification standard.
 | **What it is** | 3 markdown files for one product | CLI + workflow scaffold | Workflow tools for SDD | A specification standard |
 | **Spec format** | Implicit (RECORD, FUNCTION, etc.) | Freeform markdown | Freeform markdown | Formalized template with typed elements (SYSTEM, PATTERN, ASSET) |
 | **Element types** | Used but not defined | None | None | RECORD, FUNCTION, SCENARIO, RULE, TOKEN, ALGORITHM — first-class, named, extractable |
+| **Data contracts** | None | None | None | CONSTRAINT blocks on fields (RANGE, NOT_EMPTY, PATTERN, etc.) — Avro-like schemas in NL specs |
+| **Test derivation** | None | None | None | Tests derived from spec contracts with deterministic coverage validation |
 | **Artifact generation** | None | None | None | Closed-context generation: named block dependencies + verification contracts |
 | **Cross-references** | None | None | None | USES, USED BY, SEC tags — agents walk edges for context slicing |
 | **Composition** | None | None | None | 4-layer derivation + horizontal composition + substrate branching |
